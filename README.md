@@ -32,10 +32,10 @@ The installer downloads and registers four small GGUF models in Ollama. Each one
 |------|--------------------|-------------------------------------------------|--------------------------|
 | _(none)_ | Default            | Qwen-0.5B-Coder-El-Terminalo (Q8)              | `terminal`               |
 | `-d` | Developer          | Qwen2.5-Coder-0.5B-Instruct (Q4_K_M)           | `terminal-dev`           |
-| `-g` | Generalist         | google/gemma-3-270m-it (Q4_K_M)                | `terminal-gen`           |
+| `-g` | Generalist         | meta-llama/Llama-3.2-1B-Instruct (Q4_K_M)      | `terminal-gen`           |
 | `-f` | Function-calling   | FunctionGemma 270M (Q4_K_M)                    | `terminal-fn`            |
 
-All models are tiny (under ~500 MB each) so they run comfortably on CPU-only machines, laptops, and low-resource environments.
+All models are small enough to run comfortably on CPU-only machines, laptops, and low-resource environments (the generalist model is the largest, at ~800 MB).
 
 ## Requirements
 
@@ -43,7 +43,7 @@ All models are tiny (under ~500 MB each) so they run comfortably on CPU-only mac
 - `curl`.
 - `bash` or `zsh`.
 - `sudo` (used automatically when not running as root; installs system dependencies and configures the systemd service).
-- Internet access to download the models from Hugging Face (roughly 1.5–2 GB in total, across the four models).
+- Internet access to download the models from Hugging Face (roughly 2–2.5 GB in total, across the four models).
 
 ## Installation
 
@@ -71,9 +71,10 @@ The installer will:
 3. Configure the Ollama service (systemd on Linux, a WSL boot command, or a LaunchAgent on macOS).
 4. Wait for the Ollama server to come up.
 5. Download all four GGUF models to `~/.local/share/terminal-ai` and register them in Ollama (`ollama create`).
-6. Install the `ai` executable to `~/.local/bin/ai`.
-7. Add a `PATH` entry, environment variables, and an `ai()` shell function to `~/.bashrc` or `~/.zshrc`.
-8. Run a smoke test against each registered model.
+6. Create the per-model harness files under `~/.local/share/terminal-ai/harness` (skipped if they already exist).
+7. Install the `ai` executable to `~/.local/bin/ai`.
+8. Add a `PATH` entry, environment variables, and an `ai()` shell function to `~/.bashrc` or `~/.zshrc`.
+9. Run a smoke test against each registered model.
 
 After installation, open a new terminal or reload your shell configuration:
 
@@ -90,7 +91,7 @@ source ~/.bashrc   # or source ~/.zshrc
 This removes everything the installer created:
 
 1. The four registered models (`ollama rm`).
-2. The `~/.local/share/terminal-ai` directory (GGUF files and Modelfiles).
+2. The `~/.local/share/terminal-ai` directory (GGUF files, Modelfiles, and harness files).
 3. The `~/.local/bin/ai` executable.
 4. The managed block in `~/.bashrc` and `~/.zshrc`.
 
@@ -114,8 +115,9 @@ MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
 ```bash
 ai "<description of what you want to do>"
 ai -d "<description>"   # use the developer model (Qwen2.5-Coder-0.5B-Instruct)
-ai -g "<description>"   # use the generalist model (gemma-3-270m-it)
+ai -g "<description>"   # use the generalist model (Llama-3.2-1B-Instruct)
 ai -f "<description>"   # use the function-calling model (FunctionGemma 270M)
+ai -H [-d|-g|-f]         # edit that model's harness file in $EDITOR/$VISUAL
 ```
 
 Quotes are optional — `ai list running docker containers` works the same as `ai "list running docker containers"`.
@@ -148,6 +150,39 @@ These are exported by the installer into your shell rc file and can be overridde
 | `TERMINAL_AI_MODEL_DEV`  | `-d`    | `terminal-dev` |
 | `TERMINAL_AI_MODEL_GEN`  | `-g`    | `terminal-gen` |
 | `TERMINAL_AI_MODEL_FN`   | `-f`    | `terminal-fn`  |
+| `TERMINAL_AI_HARNESS_DIR`| harness folder | `~/.local/share/terminal-ai/harness` |
+
+## Harness (custom instructions)
+
+Each model has its own small, plain-text **harness file** — extra instructions that get appended to every prompt sent to that model, on top of the OS/shell/directory context and the language directive `ai` already adds automatically.
+
+| File           | Used by |
+|----------------|---------|
+| `default.txt`  | default model |
+| `developer.txt`| `-d` |
+| `generalist.txt`| `-g` |
+| `function.txt` | `-f` |
+
+They live in `~/.local/share/terminal-ai/harness/` (or `$TERMINAL_AI_HARNESS_DIR` if set) and are created with sensible starter content on install — they are never overwritten on a reinstall, so your edits are safe.
+
+Rules:
+- Lines starting with `#` are treated as comments and ignored.
+- Every other line is appended, in order, to the end of the prompt (after the request), so keep instructions short and specific — e.g. "Never use `sudo`." or "Prefer `awk` over `sed` for column extraction."
+
+Edit a harness file with the built-in flag (opens `$VISUAL`, falling back to `$EDITOR`, falling back to `vi`):
+
+```bash
+ai -H         # edit the default model's harness
+ai -H -d      # edit the developer model's harness
+ai -H -g      # edit the generalist model's harness
+ai -H -f      # edit the function-calling model's harness
+```
+
+Or edit the files directly — they're plain text:
+
+```bash
+"${EDITOR:-vi}" ~/.local/share/terminal-ai/harness/generalist.txt
+```
 
 ## Safety
 

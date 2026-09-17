@@ -6,7 +6,7 @@
 #   - Ollama service (systemd on Linux, LaunchAgent on macOS)
 #   - default model: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF ("terminal")
 #   - developer model (-d): Qwen2.5-Coder-0.5B-Instruct Q4_K_M ("terminal-dev")
-#   - generalist model (-g): google/gemma-3-270m-it Q4_K_M ("terminal-gen")
+#   - generalist model (-g): meta-llama/Llama-3.2-1B-Instruct Q4_K_M ("terminal-gen")
 #   - function-calling model (-f): FunctionGemma 270M Q4_K_M ("terminal-fn")
 #   - ~/.local/bin/ai command
 #   - ai() function in ~/.bashrc or ~/.zshrc
@@ -37,10 +37,11 @@ MODEL_REPO_DEV="Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF"
 MODEL_FILE_DEV="qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
 MODEL_URL_DEV="https://huggingface.co/${MODEL_REPO_DEV}/resolve/main/${MODEL_FILE_DEV}?download=true"
 
-# "generalist" model (-g): Google's compact general-purpose model.
+# "generalist" model (-g): Meta's compact general-purpose model, with
+# official multilingual support (including Portuguese).
 MODEL_NAME_GEN="${MODEL_NAME_GEN:-${MODEL_NAME}-gen}"
-MODEL_REPO_GEN="unsloth/gemma-3-270m-it-GGUF"
-MODEL_FILE_GEN="gemma-3-270m-it-Q4_K_M.gguf"
+MODEL_REPO_GEN="bartowski/Llama-3.2-1B-Instruct-GGUF"
+MODEL_FILE_GEN="Llama-3.2-1B-Instruct-Q4_K_M.gguf"
 MODEL_URL_GEN="https://huggingface.co/${MODEL_REPO_GEN}/resolve/main/${MODEL_FILE_GEN}?download=true"
 
 # "function-calling" model (-f): FunctionGemma, specialized in function/tool calls.
@@ -50,6 +51,7 @@ MODEL_FILE_FN="functiongemma-270m-it-Q4_K_M.gguf"
 MODEL_URL_FN="https://huggingface.co/${MODEL_REPO_FN}/resolve/main/${MODEL_FILE_FN}?download=true"
 
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/terminal-ai}"
+HARNESS_DIR="${INSTALL_DIR}/harness"
 BIN_DIR="${HOME}/.local/bin"
 AI_BIN="${BIN_DIR}/ai"
 
@@ -422,6 +424,26 @@ PARAMETER top_p 0.9
 SYSTEM """${system_prompt}"""
 EOF
             ;;
+        llama3)
+            cat >"$modelfile_path" <<EOF
+FROM ./${file}
+
+TEMPLATE """<|start_header_id|>system<|end_header_id|>
+
+{{ .System }}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{{ .Prompt }}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+"""
+
+PARAMETER stop "<|start_header_id|>"
+PARAMETER stop "<|eot_id|>"
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+
+SYSTEM """${system_prompt}"""
+EOF
+            ;;
         *)
             die "Unknown Modelfile template: ${template}"
             ;;
@@ -442,6 +464,45 @@ register_model() {
     ok "Model '${name}' registered."
 }
 
+# write_harness_file <path> <starter content>: creates the harness file with
+# starter content only if it doesn't already exist, so a reinstall never
+# overwrites the user's edits.
+write_harness_file() {
+    local path="$1" content="$2"
+    [[ -f "$path" ]] && return 0
+    printf '%s\n' "$content" >"$path"
+}
+
+create_harness_files() {
+    mkdir -p "$HARNESS_DIR"
+
+    write_harness_file "$HARNESS_DIR/default.txt" \
+"# Harness for the default model (Qwen-0.5B-Coder-El-Terminalo).
+# Extra instructions appended to every prompt sent to this model.
+# Lines starting with '#' are ignored. Edit freely, or run: ai -H
+Prefer commands available in a standard POSIX/GNU environment."
+
+    write_harness_file "$HARNESS_DIR/developer.txt" \
+"# Harness for the developer model (-d, Qwen2.5-Coder-0.5B-Instruct).
+# Extra instructions appended to every prompt sent to this model.
+# Lines starting with '#' are ignored. Edit freely, or run: ai -H -d
+When writing code, prefer clear, idiomatic, minimal solutions."
+
+    write_harness_file "$HARNESS_DIR/generalist.txt" \
+"# Harness for the generalist model (-g, Llama-3.2-1B-Instruct).
+# Extra instructions appended to every prompt sent to this model.
+# Lines starting with '#' are ignored. Edit freely, or run: ai -H -g
+Be concise and answer only what was asked."
+
+    write_harness_file "$HARNESS_DIR/function.txt" \
+"# Harness for the function-calling model (-f, FunctionGemma 270M).
+# Extra instructions appended to every prompt sent to this model.
+# Lines starting with '#' are ignored. Edit freely, or run: ai -H -f
+Prefer commands available in a standard POSIX/GNU environment."
+
+    ok "Harness files ready at $HARNESS_DIR"
+}
+
 create_ai_command() {
     mkdir -p "$BIN_DIR"
 
@@ -451,21 +512,26 @@ set -Eeuo pipefail
 
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
 MODEL_LABEL="${MODEL_NAME} (default · Qwen-0.5B-Coder-El-Terminalo)"
+HARNESS_DIR="${TERMINAL_AI_HARNESS_DIR:-$HOME/.local/share/terminal-ai/harness}"
+HARNESS_NAME="default"
 IS_DEV=0
 IS_GEN=0
+EDIT_HARNESS=0
 
 usage() {
-    cat <<'EOF'
+    cat <<EOF
 Usage:
   ai "description of the command"
   ai description of the command
   ai -d "description of the command"   # developer model: Qwen2.5-Coder-0.5B-Instruct
-  ai -g "description of the command"   # generalist model: gemma-3-270m-it
+  ai -g "description of the command"   # generalist model: Llama-3.2-1B-Instruct
   ai -f "description of the command"   # function-calling model: FunctionGemma 270M
+  ai -H [-d|-g|-f]                     # edit the harness file for that model in \$EDITOR/\$VISUAL
 
 Example:
   ai "show the 10 processes using the most memory"
   ai -d "write a python function that sorts a list"
+  ai -H -g                             # edit the generalist model's harness
 
 After the output is generated:
   e = execute (not available with -g, which answers in plain text)
@@ -477,11 +543,17 @@ With -d, choosing [e] first detects the generated code's language and, if a
 matching interpreter/compiler is installed, writes it to a temporary file and
 runs it that way instead of as a shell command.
 
+Harness:
+  Each model has an editable text file with extra instructions appended to
+  every prompt sent to it (lines starting with '#' are ignored). Edit with
+  -H, or directly under: ${HARNESS_DIR}
+
 Variables:
-  TERMINAL_AI_MODEL      (default,          default: terminal)
-  TERMINAL_AI_MODEL_DEV  (-d, developer,    default: terminal-dev)
-  TERMINAL_AI_MODEL_GEN  (-g, generalist,   default: terminal-gen)
-  TERMINAL_AI_MODEL_FN   (-f, function,     default: terminal-fn)
+  TERMINAL_AI_MODEL         (default,          default: terminal)
+  TERMINAL_AI_MODEL_DEV     (-d, developer,    default: terminal-dev)
+  TERMINAL_AI_MODEL_GEN     (-g, generalist,   default: terminal-gen)
+  TERMINAL_AI_MODEL_FN      (-f, function,     default: terminal-fn)
+  TERMINAL_AI_HARNESS_DIR   (harness folder,   default: ~/.local/share/terminal-ai/harness)
 EOF
 }
 
@@ -666,25 +738,31 @@ run_dev_code() {
 
 [[ $# -gt 0 ]] || { usage; exit 1; }
 
-while getopts ":dgfh" OPT; do
+while getopts ":dgfhH" OPT; do
     case "$OPT" in
         d)
             MODEL_NAME="${TERMINAL_AI_MODEL_DEV:-terminal-dev}"
             MODEL_LABEL="${MODEL_NAME} (developer · Qwen2.5-Coder-0.5B-Instruct)"
+            HARNESS_NAME="developer"
             IS_DEV=1
             ;;
         g)
             MODEL_NAME="${TERMINAL_AI_MODEL_GEN:-terminal-gen}"
-            MODEL_LABEL="${MODEL_NAME} (generalist · gemma-3-270m-it)"
+            MODEL_LABEL="${MODEL_NAME} (generalist · Llama-3.2-1B-Instruct)"
+            HARNESS_NAME="generalist"
             IS_GEN=1
             ;;
         f)
             MODEL_NAME="${TERMINAL_AI_MODEL_FN:-terminal-fn}"
             MODEL_LABEL="${MODEL_NAME} (function-calling · FunctionGemma 270M)"
+            HARNESS_NAME="function"
             ;;
         h)
             usage
             exit 0
+            ;;
+        H)
+            EDIT_HARNESS=1
             ;;
         \?)
             printf 'Invalid option: -%s\n\n' "$OPTARG" >&2
@@ -694,6 +772,14 @@ while getopts ":dgfh" OPT; do
     esac
 done
 shift $((OPTIND - 1))
+
+if [[ "$EDIT_HARNESS" -eq 1 ]]; then
+    mkdir -p "$HARNESS_DIR"
+    HARNESS_FILE="$HARNESS_DIR/${HARNESS_NAME}.txt"
+    [[ -f "$HARNESS_FILE" ]] || : >"$HARNESS_FILE"
+    "${VISUAL:-${EDITOR:-vi}}" "$HARNESS_FILE"
+    exit 0
+fi
 
 [[ $# -gt 0 ]] || { usage; exit 1; }
 
@@ -722,6 +808,15 @@ detect_system_language() {
     esac
 }
 
+# read_harness <name>: prints the harness file's content for that model,
+# comment lines (starting with '#') stripped and collapsed to one line, or
+# nothing if the file is missing/empty.
+read_harness() {
+    local file="$HARNESS_DIR/$1.txt"
+    [[ -s "$file" ]] || return 0
+    grep -v '^[[:space:]]*#' "$file" | tr '\n' ' ' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+}
+
 QUERY="$*"
 OS_NAME="linux"
 [[ "$(uname -s)" == "Darwin" ]] && OS_NAME="macos"
@@ -729,8 +824,12 @@ OS_NAME="linux"
 SHELL_NAME="$(basename "${SHELL:-bash}")"
 CWD="$PWD"
 SYSTEM_LANGUAGE="$(detect_system_language)"
+HARNESS_TEXT="$(read_harness "$HARNESS_NAME")"
 
-PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}. Respond in ${SYSTEM_LANGUAGE}."
+# Directives are appended AFTER "Request:" on purpose: these small models
+# tend to just echo an instruction back instead of following it when it
+# comes before the request.
+PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}. Respond in ${SYSTEM_LANGUAGE}.${HARNESS_TEXT:+ ${HARNESS_TEXT}}"
 
 # strip CR, occasional fences, and blank lines at the edges
 CMD="$(
@@ -840,6 +939,7 @@ export TERMINAL_AI_MODEL="${MODEL_NAME}"
 export TERMINAL_AI_MODEL_DEV="${MODEL_NAME_DEV}"
 export TERMINAL_AI_MODEL_GEN="${MODEL_NAME_GEN}"
 export TERMINAL_AI_MODEL_FN="${MODEL_NAME_FN}"
+export TERMINAL_AI_HARNESS_DIR="${HARNESS_DIR}"
 
 ai() {
     command "\$HOME/.local/bin/ai" "\$@"
@@ -974,14 +1074,15 @@ main() {
     create_modelfile "$MODEL_FILE_DEV" "$INSTALL_DIR/Modelfile.dev" chatml "$SYSTEM_PROMPT_SHELL"
     register_model "$MODEL_NAME_DEV" "$INSTALL_DIR/Modelfile.dev"
 
-    download_model "$MODEL_FILE_GEN" "$MODEL_URL_GEN" "gemma-3-270m-it (generalist)"
-    create_modelfile "$MODEL_FILE_GEN" "$INSTALL_DIR/Modelfile.gen" gemma "$SYSTEM_PROMPT_GENERAL"
+    download_model "$MODEL_FILE_GEN" "$MODEL_URL_GEN" "Llama-3.2-1B-Instruct (generalist)"
+    create_modelfile "$MODEL_FILE_GEN" "$INSTALL_DIR/Modelfile.gen" llama3 "$SYSTEM_PROMPT_GENERAL"
     register_model "$MODEL_NAME_GEN" "$INSTALL_DIR/Modelfile.gen"
 
     download_model "$MODEL_FILE_FN" "$MODEL_URL_FN" "FunctionGemma 270M (function-calling)"
     create_modelfile "$MODEL_FILE_FN" "$INSTALL_DIR/Modelfile.fn" gemma "$SYSTEM_PROMPT_SHELL"
     register_model "$MODEL_NAME_FN" "$INSTALL_DIR/Modelfile.fn"
 
+    create_harness_files
     create_ai_command
     configure_shell
 
@@ -1005,11 +1106,12 @@ Examples:
     ai -d "write a python function that sorts a list"
     ai -g "explain what an IP address is"
     ai -f "find files larger than 1 GB in /var"
+    ai -H -g                            # edit the generalist model's harness
 
 Models:
     ${MODEL_NAME}      (default         · Qwen-0.5B-Coder-El-Terminalo)
     ${MODEL_NAME_DEV}  (-d, developer   · Qwen2.5-Coder-0.5B-Instruct)
-    ${MODEL_NAME_GEN}  (-g, generalist  · gemma-3-270m-it)
+    ${MODEL_NAME_GEN}  (-g, generalist  · Llama-3.2-1B-Instruct)
     ${MODEL_NAME_FN}   (-f, function    · FunctionGemma 270M)
 
 Files:
@@ -1018,6 +1120,7 @@ Files:
     ${INSTALL_DIR}/${MODEL_FILE_GEN}
     ${INSTALL_DIR}/${MODEL_FILE_FN}
     ${INSTALL_DIR}/Modelfile{,.dev,.gen,.fn}
+    ${HARNESS_DIR}/{default,developer,generalist,function}.txt
     ${AI_BIN}
 
 Every response from the 'ai' command shows which LLM generated it.
