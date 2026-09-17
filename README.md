@@ -81,19 +81,6 @@ After installation, open a new terminal or reload your shell configuration:
 source ~/.bashrc   # or source ~/.zshrc
 ```
 
-### Optional environment variables (installer)
-
-Set these before running the installer to customize install locations or the base model name:
-
-| Variable       | Default                          | Description                                   |
-|----------------|-----------------------------------|------------------------------------------------|
-| `MODEL_NAME`   | `terminal`                        | Base name used for all four registered models (`terminal`, `terminal-dev`, `terminal-gen`, `terminal-fn`). |
-| `INSTALL_DIR`  | `$HOME/.local/share/terminal-ai`  | Where GGUF files and Modelfiles are stored.    |
-
-```bash
-MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
-```
-
 ### Uninstall
 
 ```bash
@@ -108,6 +95,19 @@ This removes everything the installer created:
 4. The managed block in `~/.bashrc` and `~/.zshrc`.
 
 Ollama itself is left installed, since it may be used by other applications — the command prints the steps to remove it too, if you want to.
+
+### Optional environment variables (installer)
+
+Set these before running the installer to customize install locations or the base model name:
+
+| Variable       | Default                          | Description                                   |
+|----------------|-----------------------------------|------------------------------------------------|
+| `MODEL_NAME`   | `terminal`                        | Base name used for all four registered models (`terminal`, `terminal-dev`, `terminal-gen`, `terminal-fn`). |
+| `INSTALL_DIR`  | `$HOME/.local/share/terminal-ai`  | Where GGUF files and Modelfiles are stored.    |
+
+```bash
+MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
+```
 
 ## Usage
 
@@ -148,16 +148,6 @@ These are exported by the installer into your shell rc file and can be overridde
 | `TERMINAL_AI_MODEL_DEV`  | `-d`    | `terminal-dev` |
 | `TERMINAL_AI_MODEL_GEN`  | `-g`    | `terminal-gen` |
 | `TERMINAL_AI_MODEL_FN`   | `-f`    | `terminal-fn`  |
-
-## Uninstalling
-
-```bash
-rm -f ~/.local/bin/ai
-rm -rf ~/.local/share/terminal-ai
-ollama rm terminal terminal-dev terminal-gen terminal-fn
-```
-
-Then remove the block delimited by `# >>> terminal-ai >>>` and `# <<< terminal-ai <<<` from your `~/.bashrc` or `~/.zshrc`.
 
 ## Safety
 
