@@ -47,8 +47,13 @@ Type "clear" Enter
 Sleep 500ms
 Show
 
-# Generalist model (-g): direct answer, in the system's language
-Type `ai -g "explain what an IP address is"`
+# Generalist model (-g): non-technical question, answered in the system's
+# language (LANG here just demonstrates that; ai reads it from the real
+# environment normally, no override needed).
+Hide
+Type `export LANG=pt_PT.UTF-8` Enter
+Show
+Type `ai -g "qual a velocidade máxima nas auto-estradas em Portugal?"`
 Enter
 Wait+Screen@20s /cancel:/
 Sleep 2.5s
