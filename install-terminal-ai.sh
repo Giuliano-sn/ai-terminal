@@ -579,6 +579,17 @@ configure_shell() {
         mv "${RC_FILE}.tmp" "$RC_FILE"
     fi
 
+    # Remove linhas em branco finais para não acumular espaço a cada reinstalação.
+    awk '
+        { lines[NR] = $0 }
+        END {
+            n = NR
+            while (n > 0 && lines[n] == "") n--
+            for (i = 1; i <= n; i++) print lines[i]
+        }
+    ' "$RC_FILE" >"${RC_FILE}.tmp"
+    mv "${RC_FILE}.tmp" "$RC_FILE"
+
     cat >>"$RC_FILE" <<EOF
 
 ${begin}
