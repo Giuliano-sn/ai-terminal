@@ -1,5 +1,7 @@
 # ai-terminal
 
+![ai-terminal demo: three examples using the default, developer (-d) and generalist (-g) models](assets/demo.gif)
+
 Natural-language-to-shell-command generator powered by [Ollama](https://ollama.com) and small local LLMs.
 
 Describe what you want to do in plain English (or any language), and `ai` turns it into a shell command you can review, copy, or run — nothing is executed automatically.
