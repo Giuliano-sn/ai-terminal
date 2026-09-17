@@ -4,7 +4,7 @@ Natural-language-to-shell-command generator powered by [Ollama](https://ollama.c
 
 Describe what you want to do in plain English (or any language), and `ai` turns it into a shell command you can review, copy, or run — nothing is executed automatically.
 
-```
+```bash
 $ ai "show the 10 processes using the most memory"
 
 [LLM: terminal (default · Qwen-0.5B-Coder-El-Terminalo)]
@@ -84,7 +84,7 @@ MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
 
 ## Usage
 
-```
+```bash
 ai "<description of what you want to do>"
 ai -d "<description>"   # use the developer model (Qwen2.5-Coder-0.5B-Instruct)
 ai -g "<description>"   # use the generalist model (gemma-3-270m-it)
