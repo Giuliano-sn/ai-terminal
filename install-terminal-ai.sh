@@ -450,6 +450,7 @@ set -Eeuo pipefail
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
 MODEL_LABEL="${MODEL_NAME} (default · Qwen-0.5B-Coder-El-Terminalo)"
 IS_DEV=0
+IS_GEN=0
 
 usage() {
     cat <<'EOF'
@@ -464,8 +465,8 @@ Example:
   ai "show the 10 processes using the most memory"
   ai -d "write a python function that sorts a list"
 
-After the command is generated:
-  e = execute
+After the output is generated:
+  e = execute (not available with -g, which answers in plain text)
   c = copy
   q = cancel
   ENTER = cancel
@@ -673,6 +674,7 @@ while getopts ":dgfh" OPT; do
         g)
             MODEL_NAME="${TERMINAL_AI_MODEL_GEN:-terminal-gen}"
             MODEL_LABEL="${MODEL_NAME} (generalist · gemma-3-270m-it)"
+            IS_GEN=1
             ;;
         f)
             MODEL_NAME="${TERMINAL_AI_MODEL_FN:-terminal-fn}"
@@ -717,13 +719,19 @@ fi
 
 printf '\n\033[2m[LLM: %s]\033[0m\n' "$MODEL_LABEL"
 printf '\n\033[1;36m%s\033[0m\n\n' "$CMD"
-printf '[e] execute  [c] copy  [q/Enter] cancel: '
+if [[ "$IS_GEN" -eq 1 ]]; then
+    printf '[c] copy  [q/Enter] cancel: '
+else
+    printf '[e] execute  [c] copy  [q/Enter] cancel: '
+fi
 IFS= read -r -n 1 ACTION || true
 printf '\n'
 
 case "${ACTION:-}" in
     e|E)
-        if [[ "$IS_DEV" -eq 1 ]]; then
+        if [[ "$IS_GEN" -eq 1 ]]; then
+            printf 'Invalid option.\n'
+        elif [[ "$IS_DEV" -eq 1 ]]; then
             run_dev_code "$CMD"
         else
             printf '\033[1;33mExecuting:\033[0m %s\n' "$CMD"

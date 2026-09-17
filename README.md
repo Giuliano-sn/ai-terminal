@@ -117,7 +117,7 @@ ai -f "find files larger than 1 GB in /var"
 
 After a command is generated, you're prompted for an action:
 
-- `e` — execute the command in your current shell.
+- `e` — execute the command in your current shell (not offered with `-g`, since the generalist model answers in plain text instead of generating a command).
 - `c` — copy the command to the clipboard (`wl-copy`, `xclip`, `xsel`, `pbcopy`, or `clip.exe`, whichever is available).
 - `q` or **Enter** — cancel, do nothing.
 
