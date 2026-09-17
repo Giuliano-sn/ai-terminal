@@ -526,7 +526,7 @@ Usage:
   ai -d "description of the command"   # developer model: Qwen2.5-Coder-0.5B-Instruct
   ai -g "description of the command"   # generalist model: Llama-3.2-1B-Instruct
   ai -f "description of the command"   # function-calling model: FunctionGemma 270M
-  ai -H [-d|-g|-f]                     # edit the harness file for that model in \$EDITOR/\$VISUAL
+  ai -H [-d|-g|-f]                     # edit the harness file for that model (\$VISUAL/\$EDITOR, or Omarchy's editor)
 
 Example:
   ai "show the 10 processes using the most memory"
@@ -547,6 +547,8 @@ Harness:
   Each model has an editable text file with extra instructions appended to
   every prompt sent to it (lines starting with '#' are ignored). Edit with
   -H, or directly under: ${HARNESS_DIR}
+  On Omarchy, -H opens the file via "omarchy launch editor" (the user's
+  configured default editor); elsewhere it uses \$VISUAL, \$EDITOR, or vi.
 
 Variables:
   TERMINAL_AI_MODEL         (default,          default: terminal)
@@ -777,7 +779,13 @@ if [[ "$EDIT_HARNESS" -eq 1 ]]; then
     mkdir -p "$HARNESS_DIR"
     HARNESS_FILE="$HARNESS_DIR/${HARNESS_NAME}.txt"
     [[ -f "$HARNESS_FILE" ]] || : >"$HARNESS_FILE"
-    "${VISUAL:-${EDITOR:-vi}}" "$HARNESS_FILE"
+    if command -v omarchy >/dev/null 2>&1; then
+        # Omarchy 4+: use the unified CLI instead of calling the legacy
+        # omarchy-launch-editor binary directly.
+        omarchy launch editor "$HARNESS_FILE"
+    else
+        "${VISUAL:-${EDITOR:-vi}}" "$HARNESS_FILE"
+    fi
     exit 0
 fi
 

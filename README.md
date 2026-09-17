@@ -169,7 +169,7 @@ Rules:
 - Lines starting with `#` are treated as comments and ignored.
 - Every other line is appended, in order, to the end of the prompt (after the request), so keep instructions short and specific — e.g. "Never use `sudo`." or "Prefer `awk` over `sed` for column extraction."
 
-Edit a harness file with the built-in flag (opens `$VISUAL`, falling back to `$EDITOR`, falling back to `vi`):
+Edit a harness file with the built-in flag. On [Omarchy](https://omarchy.org/) it opens through `omarchy launch editor` (your configured default editor); elsewhere it opens `$VISUAL`, falling back to `$EDITOR`, falling back to `vi`:
 
 ```bash
 ai -H         # edit the default model's harness
