@@ -18,6 +18,8 @@
 #   chmod +x install-terminal-ai.sh
 #   ./install-terminal-ai.sh
 #
+#   ./install-terminal-ai.sh --remove   # completely removes what was installed
+#
 # Optional variables:
 #   MODEL_NAME=terminal ./install-terminal-ai.sh
 #   INSTALL_DIR="$HOME/.local/share/terminal-ai" ./install-terminal-ai.sh
@@ -766,21 +768,32 @@ AI_SCRIPT
     ok "Command created: $AI_BIN"
 }
 
+TERMINAL_AI_BLOCK_BEGIN="# >>> terminal-ai >>>"
+TERMINAL_AI_BLOCK_END="# <<< terminal-ai <<<"
+
+# strip_terminal_ai_block <rc file>: removes the terminal-ai managed block, if present.
+strip_terminal_ai_block() {
+    local rc_file="$1"
+
+    [[ -f "$rc_file" ]] || return 0
+    grep -Fq "$TERMINAL_AI_BLOCK_BEGIN" "$rc_file" || return 0
+
+    awk -v b="$TERMINAL_AI_BLOCK_BEGIN" -v e="$TERMINAL_AI_BLOCK_END" '
+        $0 == b {skip=1; next}
+        $0 == e {skip=0; next}
+        !skip {print}
+    ' "$rc_file" >"${rc_file}.tmp"
+    mv "${rc_file}.tmp" "$rc_file"
+}
+
 configure_shell() {
     touch "$RC_FILE"
 
-    local begin="# >>> terminal-ai >>>"
-    local end="# <<< terminal-ai <<<"
+    local begin="$TERMINAL_AI_BLOCK_BEGIN"
+    local end="$TERMINAL_AI_BLOCK_END"
 
     # Remove old block to keep the installation idempotent.
-    if grep -Fq "$begin" "$RC_FILE"; then
-        awk -v b="$begin" -v e="$end" '
-            $0 == b {skip=1; next}
-            $0 == e {skip=0; next}
-            !skip {print}
-        ' "$RC_FILE" >"${RC_FILE}.tmp"
-        mv "${RC_FILE}.tmp" "$RC_FILE"
-    fi
+    strip_terminal_ai_block "$RC_FILE"
 
     # Remove trailing blank lines so they don't pile up on every reinstall.
     awk '
@@ -823,6 +836,85 @@ smoke_test() {
     else
         warn "Model '${name}' was installed, but the test returned no content."
     fi
+}
+
+remove_model() {
+    local name="$1"
+
+    have ollama || return 0
+
+    if ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$name"; then
+        if ollama rm "$name" >/dev/null 2>&1; then
+            ok "Model '${name}' removed."
+        else
+            warn "Failed to remove model '${name}'."
+        fi
+    fi
+}
+
+remove_all() {
+    printf '\n=== Removing Terminal AI / Qwen 0.5B ===\n\n'
+
+    setup_sudo
+    detect_os
+
+    remove_model "$MODEL_NAME"
+    remove_model "$MODEL_NAME_DEV"
+    remove_model "$MODEL_NAME_GEN"
+    remove_model "$MODEL_NAME_FN"
+
+    if [[ -d "$INSTALL_DIR" ]]; then
+        rm -rf "$INSTALL_DIR"
+        ok "Directory removed: $INSTALL_DIR"
+    else
+        info "Directory not found: $INSTALL_DIR"
+    fi
+
+    if [[ -f "$AI_BIN" ]]; then
+        rm -f "$AI_BIN"
+        ok "Command removed: $AI_BIN"
+    else
+        info "Command not found: $AI_BIN"
+    fi
+
+    # Strip the managed block from both rc files, regardless of the shell
+    # currently in use, in case it was installed under a different shell.
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [[ -f "$rc" ]] && grep -Fq "$TERMINAL_AI_BLOCK_BEGIN" "$rc" 2>/dev/null; then
+            strip_terminal_ai_block "$rc"
+            ok "Configuration removed from $rc"
+        fi
+    done
+
+    cat <<EOF
+
+Removal complete.
+
+Ollama itself was NOT removed, since it may be used by other applications.
+To remove it completely as well:
+
+EOF
+
+    if [[ "$OS_FAMILY" == "macos" ]]; then
+        cat <<EOF
+    launchctl bootout "gui/\$(id -u)" "\$HOME/Library/LaunchAgents/com.terminal-ai.ollama.plist" 2>/dev/null
+    rm -f "\$HOME/Library/LaunchAgents/com.terminal-ai.ollama.plist"
+    rm -rf ~/.ollama
+    # If installed via the official app/installer, also remove /Applications/Ollama.app
+    # and the 'ollama' binary/service it created.
+
+EOF
+    else
+        cat <<EOF
+    sudo systemctl disable --now ollama 2>/dev/null
+    sudo rm -f /etc/systemd/system/ollama.service
+    sudo rm -f "\$(command -v ollama)"
+    rm -rf ~/.ollama
+
+EOF
+    fi
+
+    printf 'Open a new terminal for the changes to take effect.\n\n'
 }
 
 main() {
@@ -910,4 +1002,11 @@ You need to choose [e] to run it.
 EOF
 }
 
-main "$@"
+case "${1:-}" in
+    --remove|--uninstall)
+        remove_all
+        ;;
+    *)
+        main "$@"
+        ;;
+esac

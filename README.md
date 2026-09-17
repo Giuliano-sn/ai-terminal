@@ -94,6 +94,21 @@ Set these before running the installer to customize install locations or the bas
 MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
 ```
 
+### Uninstall
+
+```bash
+./install-terminal-ai.sh --remove
+```
+
+This removes everything the installer created:
+
+1. The four registered models (`ollama rm`).
+2. The `~/.local/share/terminal-ai` directory (GGUF files and Modelfiles).
+3. The `~/.local/bin/ai` executable.
+4. The managed block in `~/.bashrc` and `~/.zshrc`.
+
+Ollama itself is left installed, since it may be used by other applications — the command prints the steps to remove it too, if you want to.
+
 ## Usage
 
 ```bash
