@@ -47,6 +47,16 @@ All models are tiny (under ~500 MB each) so they run comfortably on CPU-only mac
 
 ## Installation
 
+### Quick install
+
+Downloads the installer script and runs it directly, without cloning the repository:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Giuliano-sn/ai-terminal/main/install-terminal-ai.sh | bash
+```
+
+### Manual install
+
 ```bash
 git clone <this-repo-url>
 cd ai-terminal

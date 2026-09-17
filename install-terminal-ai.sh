@@ -449,6 +449,7 @@ set -Eeuo pipefail
 
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
 MODEL_LABEL="${MODEL_NAME} (default · Qwen-0.5B-Coder-El-Terminalo)"
+IS_DEV=0
 
 usage() {
     cat <<'EOF'
@@ -469,12 +470,195 @@ After the command is generated:
   q = cancel
   ENTER = cancel
 
+With -d, choosing [e] first detects the generated code's language and, if a
+matching interpreter/compiler is installed, writes it to a temporary file and
+runs it that way instead of as a shell command.
+
 Variables:
   TERMINAL_AI_MODEL      (default,          default: terminal)
   TERMINAL_AI_MODEL_DEV  (-d, developer,    default: terminal-dev)
   TERMINAL_AI_MODEL_GEN  (-g, generalist,   default: terminal-gen)
   TERMINAL_AI_MODEL_FN   (-f, function,     default: terminal-fn)
 EOF
+}
+
+# detect_language <code>: prints one of
+#   python javascript ruby php c cpp java go rust shell
+detect_language() {
+    local code="$1" shebang
+
+    shebang="$(printf '%s\n' "$code" | head -n1)"
+    case "$shebang" in
+        '#!'*python*) printf 'python\n'; return ;;
+        '#!'*node*)   printf 'javascript\n'; return ;;
+        '#!'*ruby*)   printf 'ruby\n'; return ;;
+        '#!'*php*)    printf 'php\n'; return ;;
+        '#!'*sh)      printf 'shell\n'; return ;;
+        '#!'*bash)    printf 'shell\n'; return ;;
+    esac
+
+    if printf '%s' "$code" | grep -qE '<\?php'; then
+        printf 'php\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\bpackage[[:space:]]+main\b' &&
+       printf '%s' "$code" | grep -qE '\bfunc[[:space:]]+main[[:space:]]*\('; then
+        printf 'go\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\bfn[[:space:]]+main[[:space:]]*\(' &&
+       printf '%s' "$code" | grep -qE 'println!|let[[:space:]]+mut'; then
+        printf 'rust\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\bpublic[[:space:]]+class[[:space:]]+[A-Za-z_]' ||
+       printf '%s' "$code" | grep -qE '\bpublic[[:space:]]+static[[:space:]]+void[[:space:]]+main\b'; then
+        printf 'java\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '#include[[:space:]]*<iostream>' ||
+       printf '%s' "$code" | grep -qE '\bstd::'; then
+        printf 'cpp\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '#include[[:space:]]*<[a-z./]+\.h>' ||
+       printf '%s' "$code" | grep -qE '\bint[[:space:]]+main[[:space:]]*\('; then
+        printf 'c\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\bdef[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\(.*\)[[:space:]]*:' ||
+       printf '%s' "$code" | grep -qE '^[[:space:]]*(import|from)[[:space:]]+[A-Za-z_.]+' ||
+       printf '%s' "$code" | grep -qE '^[[:space:]]*print\(.*\)[[:space:]]*$'; then
+        printf 'python\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\brequire[[:space:]]+["'"'"']' ||
+       printf '%s' "$code" | grep -qE '\bputs[[:space:]]'; then
+        printf 'ruby\n'; return
+    fi
+    if printf '%s' "$code" | grep -qE '\bconsole\.log[[:space:]]*\(' ||
+       printf '%s' "$code" | grep -qE '\b(const|let|var)[[:space:]]+[A-Za-z_$][A-Za-z0-9_$]*[[:space:]]*=' ||
+       printf '%s' "$code" | grep -qE '=>' ||
+       printf '%s' "$code" | grep -qE '\bfunction[[:space:]]*[A-Za-z_]*[[:space:]]*\('; then
+        printf 'javascript\n'; return
+    fi
+
+    printf 'shell\n'
+}
+
+missing_interpreter_msg() {
+    printf '\033[1;31m%s\033[0m\n' \
+        "Install the interpreter or compiler in your environment before running programming language commands." >&2
+}
+
+# run_dev_code <code>: for the developer model, detect the language and run
+# it with the matching interpreter/compiler from a temporary file, falling
+# back to running it as a shell command when no language is recognized.
+run_dev_code() {
+    local code="$1" lang tmp_dir
+
+    lang="$(detect_language "$code")"
+
+    if [[ "$lang" == "shell" ]]; then
+        printf '\033[1;33mExecuting:\033[0m %s\n' "$code"
+        "${SHELL:-/bin/bash}" -lc "$code"
+        return
+    fi
+
+    printf '\033[2m[Detected language: %s]\033[0m\n' "$lang"
+
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' EXIT
+
+    case "$lang" in
+        python)
+            if command -v python3 >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/script.py"
+                python3 "$tmp_dir/script.py"
+            elif command -v python >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/script.py"
+                python "$tmp_dir/script.py"
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        javascript)
+            if command -v node >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/script.js"
+                node "$tmp_dir/script.js"
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        ruby)
+            if command -v ruby >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/script.rb"
+                ruby "$tmp_dir/script.rb"
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        php)
+            if command -v php >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/script.php"
+                php "$tmp_dir/script.php"
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        c)
+            local cc_bin=""
+            command -v gcc >/dev/null 2>&1 && cc_bin="gcc"
+            [[ -n "$cc_bin" ]] || { command -v cc >/dev/null 2>&1 && cc_bin="cc"; }
+            if [[ -n "$cc_bin" ]]; then
+                printf '%s\n' "$code" >"$tmp_dir/prog.c"
+                if "$cc_bin" "$tmp_dir/prog.c" -o "$tmp_dir/prog"; then
+                    "$tmp_dir/prog"
+                fi
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        cpp)
+            local cxx_bin=""
+            command -v g++ >/dev/null 2>&1 && cxx_bin="g++"
+            [[ -n "$cxx_bin" ]] || { command -v clang++ >/dev/null 2>&1 && cxx_bin="clang++"; }
+            if [[ -n "$cxx_bin" ]]; then
+                printf '%s\n' "$code" >"$tmp_dir/prog.cpp"
+                if "$cxx_bin" "$tmp_dir/prog.cpp" -o "$tmp_dir/prog"; then
+                    "$tmp_dir/prog"
+                fi
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        java)
+            if command -v javac >/dev/null 2>&1 && command -v java >/dev/null 2>&1; then
+                local classname
+                classname="$(printf '%s' "$code" |
+                    grep -oE 'public[[:space:]]+class[[:space:]]+[A-Za-z_][A-Za-z0-9_]*' |
+                    awk '{print $NF}' | head -n1)"
+                [[ -n "$classname" ]] || classname="Main"
+                printf '%s\n' "$code" >"$tmp_dir/${classname}.java"
+                if (cd "$tmp_dir" && javac "${classname}.java"); then
+                    (cd "$tmp_dir" && java "$classname")
+                fi
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        go)
+            if command -v go >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/main.go"
+                go run "$tmp_dir/main.go"
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+        rust)
+            if command -v rustc >/dev/null 2>&1; then
+                printf '%s\n' "$code" >"$tmp_dir/main.rs"
+                if rustc "$tmp_dir/main.rs" -o "$tmp_dir/main" 2>/dev/null; then
+                    "$tmp_dir/main"
+                fi
+            else
+                missing_interpreter_msg
+            fi
+            ;;
+    esac
 }
 
 [[ $# -gt 0 ]] || { usage; exit 1; }
@@ -484,6 +668,7 @@ while getopts ":dgfh" OPT; do
         d)
             MODEL_NAME="${TERMINAL_AI_MODEL_DEV:-terminal-dev}"
             MODEL_LABEL="${MODEL_NAME} (developer · Qwen2.5-Coder-0.5B-Instruct)"
+            IS_DEV=1
             ;;
         g)
             MODEL_NAME="${TERMINAL_AI_MODEL_GEN:-terminal-gen}"
@@ -538,9 +723,13 @@ printf '\n'
 
 case "${ACTION:-}" in
     e|E)
-        printf '\033[1;33mExecuting:\033[0m %s\n' "$CMD"
-        # Runs in the current shell chosen by the user.
-        "${SHELL:-/bin/bash}" -lc "$CMD"
+        if [[ "$IS_DEV" -eq 1 ]]; then
+            run_dev_code "$CMD"
+        else
+            printf '\033[1;33mExecuting:\033[0m %s\n' "$CMD"
+            # Runs in the current shell chosen by the user.
+            "${SHELL:-/bin/bash}" -lc "$CMD"
+        fi
         ;;
     c|C)
         if command -v wl-copy >/dev/null 2>&1; then
