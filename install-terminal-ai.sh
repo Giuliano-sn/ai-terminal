@@ -4,8 +4,10 @@
 # Instala e configura:
 #   - Ollama
 #   - serviço Ollama (systemd no Linux, LaunchAgent no macOS)
-#   - Qwen-0.5B-Coder-El-Terminalo Q8 GGUF
-#   - modelo "terminal" no Ollama
+#   - modelo padrão: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF ("terminal")
+#   - modelo developer (-d): Qwen2.5-Coder-0.5B-Instruct Q4_K_M ("terminal-dev")
+#   - modelo generalist (-g): google/gemma-3-270m-it Q4_K_M ("terminal-gen")
+#   - modelo function-calling (-f): FunctionGemma 270M Q4_K_M ("terminal-fn")
 #   - comando ~/.local/bin/ai
 #   - função ai() no ~/.bashrc ou ~/.zshrc
 #
@@ -26,6 +28,25 @@ MODEL_NAME="${MODEL_NAME:-terminal}"
 MODEL_REPO="albinab/Qwen-0.5B-Coder-El-Terminalo"
 MODEL_FILE="Qwen-0.5B-Coder-El-Terminalo-q8.gguf"
 MODEL_URL="https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true"
+
+# Modelo "developer" (-d): otimizado para geração de código/comandos.
+MODEL_NAME_DEV="${MODEL_NAME_DEV:-${MODEL_NAME}-dev}"
+MODEL_REPO_DEV="Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF"
+MODEL_FILE_DEV="qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
+MODEL_URL_DEV="https://huggingface.co/${MODEL_REPO_DEV}/resolve/main/${MODEL_FILE_DEV}?download=true"
+
+# Modelo "generalist" (-g): modelo compacto de propósito geral do Google.
+MODEL_NAME_GEN="${MODEL_NAME_GEN:-${MODEL_NAME}-gen}"
+MODEL_REPO_GEN="unsloth/gemma-3-270m-it-GGUF"
+MODEL_FILE_GEN="gemma-3-270m-it-Q4_K_M.gguf"
+MODEL_URL_GEN="https://huggingface.co/${MODEL_REPO_GEN}/resolve/main/${MODEL_FILE_GEN}?download=true"
+
+# Modelo "function-calling" (-f): FunctionGemma, especializado em chamadas de função/tools.
+MODEL_NAME_FN="${MODEL_NAME_FN:-${MODEL_NAME}-fn}"
+MODEL_REPO_FN="unsloth/functiongemma-270m-it-GGUF"
+MODEL_FILE_FN="functiongemma-270m-it-Q4_K_M.gguf"
+MODEL_URL_FN="https://huggingface.co/${MODEL_REPO_FN}/resolve/main/${MODEL_FILE_FN}?download=true"
+
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/terminal-ai}"
 BIN_DIR="${HOME}/.local/bin"
 AI_BIN="${BIN_DIR}/ai"
@@ -314,24 +335,26 @@ wait_for_ollama() {
 }
 
 download_model() {
+    local file="$1" url="$2" label="$3"
+
     mkdir -p "$INSTALL_DIR"
 
-    if [[ -s "$INSTALL_DIR/$MODEL_FILE" ]]; then
-        ok "GGUF já existe: $INSTALL_DIR/$MODEL_FILE"
+    if [[ -s "$INSTALL_DIR/$file" ]]; then
+        ok "GGUF já existe: $INSTALL_DIR/$file"
         return
     fi
 
-    info "Baixando ${MODEL_FILE} (~500 MB)..."
+    info "Baixando ${label} (${file})..."
     curl -fL --retry 3 --retry-delay 2 \
         --progress-bar \
-        "$MODEL_URL" \
-        -o "$INSTALL_DIR/$MODEL_FILE.part"
+        "$url" \
+        -o "$INSTALL_DIR/$file.part"
 
-    mv "$INSTALL_DIR/$MODEL_FILE.part" "$INSTALL_DIR/$MODEL_FILE"
-    ok "Modelo baixado."
+    mv "$INSTALL_DIR/$file.part" "$INSTALL_DIR/$file"
+    ok "${label} baixado."
 }
 
-create_modelfile() {
+compute_system_prompt() {
     local os_prompt shell_prompt
 
     if [[ "$OS_FAMILY" == "macos" ]]; then
@@ -342,8 +365,17 @@ create_modelfile() {
         shell_prompt="$SHELL_NAME"
     fi
 
-    cat >"$INSTALL_DIR/Modelfile" <<EOF
-FROM ./${MODEL_FILE}
+    SYSTEM_PROMPT="You are a shell command generator. OS: ${os_prompt}, Shell: ${shell_prompt}. Output ONLY the command. Never wrap commands in markdown fences."
+}
+
+# create_modelfile <arquivo .gguf> <caminho do Modelfile> <template: chatml|gemma>
+create_modelfile() {
+    local file="$1" modelfile_path="$2" template="$3"
+
+    case "$template" in
+        chatml)
+            cat >"$modelfile_path" <<EOF
+FROM ./${file}
 
 TEMPLATE """<|im_start|>system
 {{ .System }}<|im_end|>
@@ -357,19 +389,49 @@ PARAMETER stop "<|im_end|>"
 PARAMETER temperature 0.1
 PARAMETER top_p 0.9
 
-SYSTEM """You are a shell command generator. OS: ${os_prompt}, Shell: ${shell_prompt}. Output ONLY the command. Never wrap commands in markdown fences."""
+SYSTEM """${SYSTEM_PROMPT}"""
 EOF
+            ;;
+        gemma)
+            # Gemma não possui papel "system" próprio: o conteúdo é embutido no
+            # primeiro turno do usuário, seguindo a convenção usada pela comunidade
+            # em Modelfiles do Ollama para a família Gemma.
+            cat >"$modelfile_path" <<EOF
+FROM ./${file}
 
-    ok "Modelfile criado em $INSTALL_DIR/Modelfile"
+TEMPLATE """<start_of_turn>user
+{{ .System }}
+
+{{ .Prompt }}<end_of_turn>
+<start_of_turn>model
+"""
+
+PARAMETER stop "<start_of_turn>"
+PARAMETER stop "<end_of_turn>"
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+
+SYSTEM """${SYSTEM_PROMPT}"""
+EOF
+            ;;
+        *)
+            die "Template de Modelfile desconhecido: ${template}"
+            ;;
+    esac
+
+    ok "Modelfile criado em $modelfile_path"
 }
 
+# register_model <nome no Ollama> <caminho do Modelfile>
 register_model() {
-    info "Registrando modelo '${MODEL_NAME}' no Ollama..."
+    local name="$1" modelfile_path="$2"
+
+    info "Registrando modelo '${name}' no Ollama..."
     (
-        cd "$INSTALL_DIR"
-        ollama create "$MODEL_NAME" -f Modelfile
+        cd "$(dirname "$modelfile_path")"
+        ollama create "$name" -f "$(basename "$modelfile_path")"
     )
-    ok "Modelo '${MODEL_NAME}' registrado."
+    ok "Modelo '${name}' registrado."
 }
 
 create_ai_command() {
@@ -380,15 +442,20 @@ create_ai_command() {
 set -Eeuo pipefail
 
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
+MODEL_LABEL="${MODEL_NAME} (padrão · Qwen-0.5B-Coder-El-Terminalo)"
 
 usage() {
     cat <<'EOF'
 Uso:
   ai "descrição do comando"
   ai descrição do comando
+  ai -d "descrição do comando"   # modelo developer: Qwen2.5-Coder-0.5B-Instruct
+  ai -g "descrição do comando"   # modelo generalist: gemma-3-270m-it
+  ai -f "descrição do comando"   # modelo function-calling: FunctionGemma 270M
 
 Exemplo:
   ai "mostrar os 10 processos que mais usam memória"
+  ai -d "escrever uma função em python que ordena uma lista"
 
 Após gerar o comando:
   e = executar
@@ -397,9 +464,41 @@ Após gerar o comando:
   ENTER = cancelar
 
 Variáveis:
-  TERMINAL_AI_MODEL=terminal
+  TERMINAL_AI_MODEL      (padrão,          padrão: terminal)
+  TERMINAL_AI_MODEL_DEV  (-d, developer,   padrão: terminal-dev)
+  TERMINAL_AI_MODEL_GEN  (-g, generalist,  padrão: terminal-gen)
+  TERMINAL_AI_MODEL_FN   (-f, function,    padrão: terminal-fn)
 EOF
 }
+
+[[ $# -gt 0 ]] || { usage; exit 1; }
+
+while getopts ":dgfh" OPT; do
+    case "$OPT" in
+        d)
+            MODEL_NAME="${TERMINAL_AI_MODEL_DEV:-terminal-dev}"
+            MODEL_LABEL="${MODEL_NAME} (developer · Qwen2.5-Coder-0.5B-Instruct)"
+            ;;
+        g)
+            MODEL_NAME="${TERMINAL_AI_MODEL_GEN:-terminal-gen}"
+            MODEL_LABEL="${MODEL_NAME} (generalist · gemma-3-270m-it)"
+            ;;
+        f)
+            MODEL_NAME="${TERMINAL_AI_MODEL_FN:-terminal-fn}"
+            MODEL_LABEL="${MODEL_NAME} (function-calling · FunctionGemma 270M)"
+            ;;
+        h)
+            usage
+            exit 0
+            ;;
+        \?)
+            printf 'Opção inválida: -%s\n\n' "$OPTARG" >&2
+            usage
+            exit 1
+            ;;
+    esac
+done
+shift $((OPTIND - 1))
 
 [[ $# -gt 0 ]] || { usage; exit 1; }
 
@@ -425,6 +524,7 @@ if [[ -z "$CMD" ]]; then
     exit 2
 fi
 
+printf '\n\033[2m[LLM: %s]\033[0m\n' "$MODEL_LABEL"
 printf '\n\033[1;36m%s\033[0m\n\n' "$CMD"
 printf '[e] executar  [c] copiar  [q/Enter] cancelar: '
 IFS= read -r -n 1 ACTION || true
@@ -484,6 +584,9 @@ configure_shell() {
 ${begin}
 export PATH="\$HOME/.local/bin:\$PATH"
 export TERMINAL_AI_MODEL="${MODEL_NAME}"
+export TERMINAL_AI_MODEL_DEV="${MODEL_NAME_DEV}"
+export TERMINAL_AI_MODEL_GEN="${MODEL_NAME_GEN}"
+export TERMINAL_AI_MODEL_FN="${MODEL_NAME_FN}"
 
 ai() {
     command "\$HOME/.local/bin/ai" "\$@"
@@ -495,14 +598,16 @@ EOF
 }
 
 smoke_test() {
-    info "Testando o modelo..."
+    local name="$1" label="$2"
     local result
-    result="$(ollama run "$MODEL_NAME" "OS: linux. Shell: bash. Request: list running docker containers" 2>/dev/null || true)"
+
+    info "Testando o modelo '${name}' (${label})..."
+    result="$(ollama run "$name" "OS: linux. Shell: bash. Request: list running docker containers" 2>/dev/null || true)"
 
     if [[ -n "$result" ]]; then
-        printf '\nTeste do modelo:\n  %s\n\n' "$result"
+        printf '\nTeste do modelo (%s):\n  %s\n\n' "$label" "$result"
     else
-        warn "O modelo foi instalado, mas o teste não retornou conteúdo."
+        warn "O modelo '${name}' foi instalado, mas o teste não retornou conteúdo."
     fi
 }
 
@@ -527,12 +632,31 @@ main() {
     fi
 
     wait_for_ollama
-    download_model
-    create_modelfile
-    register_model
+    compute_system_prompt
+
+    download_model "$MODEL_FILE" "$MODEL_URL" "Qwen-0.5B-Coder-El-Terminalo (padrão)"
+    create_modelfile "$MODEL_FILE" "$INSTALL_DIR/Modelfile" chatml
+    register_model "$MODEL_NAME" "$INSTALL_DIR/Modelfile"
+
+    download_model "$MODEL_FILE_DEV" "$MODEL_URL_DEV" "Qwen2.5-Coder-0.5B-Instruct (developer)"
+    create_modelfile "$MODEL_FILE_DEV" "$INSTALL_DIR/Modelfile.dev" chatml
+    register_model "$MODEL_NAME_DEV" "$INSTALL_DIR/Modelfile.dev"
+
+    download_model "$MODEL_FILE_GEN" "$MODEL_URL_GEN" "gemma-3-270m-it (generalist)"
+    create_modelfile "$MODEL_FILE_GEN" "$INSTALL_DIR/Modelfile.gen" gemma
+    register_model "$MODEL_NAME_GEN" "$INSTALL_DIR/Modelfile.gen"
+
+    download_model "$MODEL_FILE_FN" "$MODEL_URL_FN" "FunctionGemma 270M (function-calling)"
+    create_modelfile "$MODEL_FILE_FN" "$INSTALL_DIR/Modelfile.fn" gemma
+    register_model "$MODEL_NAME_FN" "$INSTALL_DIR/Modelfile.fn"
+
     create_ai_command
     configure_shell
-    smoke_test
+
+    smoke_test "$MODEL_NAME" "padrão"
+    smoke_test "$MODEL_NAME_DEV" "developer"
+    smoke_test "$MODEL_NAME_GEN" "generalist"
+    smoke_test "$MODEL_NAME_FN" "function-calling"
 
     cat <<EOF
 
@@ -546,16 +670,25 @@ Exemplos:
 
     ai "mostrar os 10 processos que mais consomem memória"
     ai "mostrar containers docker em execução"
-    ai "qual processo está usando a porta 8080"
-    ai "encontrar arquivos maiores que 1 GB em /var"
+    ai -d "escrever uma função em python que ordena uma lista"
+    ai -g "explicar o que é um endereço IP"
+    ai -f "encontrar arquivos maiores que 1 GB em /var"
 
-Modelo:
-    ${MODEL_NAME}
+Modelos:
+    ${MODEL_NAME}      (padrão          · Qwen-0.5B-Coder-El-Terminalo)
+    ${MODEL_NAME_DEV}  (-d, developer   · Qwen2.5-Coder-0.5B-Instruct)
+    ${MODEL_NAME_GEN}  (-g, generalist  · gemma-3-270m-it)
+    ${MODEL_NAME_FN}   (-f, function    · FunctionGemma 270M)
 
 Arquivos:
     ${INSTALL_DIR}/${MODEL_FILE}
-    ${INSTALL_DIR}/Modelfile
+    ${INSTALL_DIR}/${MODEL_FILE_DEV}
+    ${INSTALL_DIR}/${MODEL_FILE_GEN}
+    ${INSTALL_DIR}/${MODEL_FILE_FN}
+    ${INSTALL_DIR}/Modelfile{,.dev,.gen,.fn}
     ${AI_BIN}
+
+Cada resposta do comando 'ai' exibe qual LLM foi usado para gerá-la.
 
 O comando gerado NÃO é executado automaticamente.
 Você precisa escolher [e] para executá-lo.
