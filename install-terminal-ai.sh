@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # install-terminal-ai.sh
 #
-# Instala e configura:
+# Installs and configures:
 #   - Ollama
-#   - serviço Ollama (systemd no Linux, LaunchAgent no macOS)
-#   - modelo padrão: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF ("terminal")
-#   - modelo developer (-d): Qwen2.5-Coder-0.5B-Instruct Q4_K_M ("terminal-dev")
-#   - modelo generalist (-g): google/gemma-3-270m-it Q4_K_M ("terminal-gen")
-#   - modelo function-calling (-f): FunctionGemma 270M Q4_K_M ("terminal-fn")
-#   - comando ~/.local/bin/ai
-#   - função ai() no ~/.bashrc ou ~/.zshrc
+#   - Ollama service (systemd on Linux, LaunchAgent on macOS)
+#   - default model: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF ("terminal")
+#   - developer model (-d): Qwen2.5-Coder-0.5B-Instruct Q4_K_M ("terminal-dev")
+#   - generalist model (-g): google/gemma-3-270m-it Q4_K_M ("terminal-gen")
+#   - function-calling model (-f): FunctionGemma 270M Q4_K_M ("terminal-fn")
+#   - ~/.local/bin/ai command
+#   - ai() function in ~/.bashrc or ~/.zshrc
 #
-# Plataformas:
+# Platforms:
 #   macOS, WSL, Ubuntu, Fedora, CentOS, AlmaLinux, Omarchy/Arch Linux
 #
-# Uso:
+# Usage:
 #   chmod +x install-terminal-ai.sh
 #   ./install-terminal-ai.sh
 #
-# Variáveis opcionais:
+# Optional variables:
 #   MODEL_NAME=terminal ./install-terminal-ai.sh
 #   INSTALL_DIR="$HOME/.local/share/terminal-ai" ./install-terminal-ai.sh
 #
@@ -29,19 +29,19 @@ MODEL_REPO="albinab/Qwen-0.5B-Coder-El-Terminalo"
 MODEL_FILE="Qwen-0.5B-Coder-El-Terminalo-q8.gguf"
 MODEL_URL="https://huggingface.co/${MODEL_REPO}/resolve/main/${MODEL_FILE}?download=true"
 
-# Modelo "developer" (-d): otimizado para geração de código/comandos.
+# "developer" model (-d): optimized for code/command generation.
 MODEL_NAME_DEV="${MODEL_NAME_DEV:-${MODEL_NAME}-dev}"
 MODEL_REPO_DEV="Qwen/Qwen2.5-Coder-0.5B-Instruct-GGUF"
 MODEL_FILE_DEV="qwen2.5-coder-0.5b-instruct-q4_k_m.gguf"
 MODEL_URL_DEV="https://huggingface.co/${MODEL_REPO_DEV}/resolve/main/${MODEL_FILE_DEV}?download=true"
 
-# Modelo "generalist" (-g): modelo compacto de propósito geral do Google.
+# "generalist" model (-g): Google's compact general-purpose model.
 MODEL_NAME_GEN="${MODEL_NAME_GEN:-${MODEL_NAME}-gen}"
 MODEL_REPO_GEN="unsloth/gemma-3-270m-it-GGUF"
 MODEL_FILE_GEN="gemma-3-270m-it-Q4_K_M.gguf"
 MODEL_URL_GEN="https://huggingface.co/${MODEL_REPO_GEN}/resolve/main/${MODEL_FILE_GEN}?download=true"
 
-# Modelo "function-calling" (-f): FunctionGemma, especializado em chamadas de função/tools.
+# "function-calling" model (-f): FunctionGemma, specialized in function/tool calls.
 MODEL_NAME_FN="${MODEL_NAME_FN:-${MODEL_NAME}-fn}"
 MODEL_REPO_FN="unsloth/functiongemma-270m-it-GGUF"
 MODEL_FILE_FN="functiongemma-270m-it-Q4_K_M.gguf"
@@ -95,13 +95,13 @@ detect_os() {
             DISTRO="linux"
         fi
 
-        # Omarchy pode reportar Arch; esta checagem deixa o resultado explícito.
+        # Omarchy may report as Arch; this check makes the result explicit.
         if have omarchy || [[ -d "$HOME/.local/share/omarchy" ]] ||
            grep -qi 'omarchy' /etc/os-release 2>/dev/null; then
             DISTRO="omarchy"
         fi
     else
-        die "Sistema não suportado: $(uname -s)"
+        die "Unsupported system: $(uname -s)"
     fi
 
     case "${SHELL:-}" in
@@ -117,9 +117,9 @@ detect_os() {
     esac
 
     if [[ "$IS_WSL" -eq 1 ]]; then
-        info "Sistema: ${DISTRO} / WSL"
+        info "System: ${DISTRO} / WSL"
     else
-        info "Sistema: ${DISTRO}"
+        info "System: ${DISTRO}"
     fi
     info "Shell: ${SHELL_NAME} (${RC_FILE})"
 }
@@ -146,30 +146,30 @@ install_linux_requirements() {
             $SUDO pacman -Sy --needed --noconfirm curl ca-certificates
             ;;
         *)
-            warn "Distribuição '$distro' não reconhecida para instalação automática de dependências."
-            have curl || die "Instale 'curl' manualmente e execute novamente."
+            warn "Distribution '$distro' not recognized for automatic dependency installation."
+            have curl || die "Install 'curl' manually and run this script again."
             ;;
     esac
 }
 
 install_macos_requirements() {
     if ! have curl; then
-        die "curl não encontrado. Instale as Command Line Tools do macOS."
+        die "curl not found. Install the macOS Command Line Tools."
     fi
 }
 
 install_ollama() {
     if have ollama; then
-        ok "Ollama já instalado: $(ollama --version 2>/dev/null || true)"
+        ok "Ollama already installed: $(ollama --version 2>/dev/null || true)"
         return
     fi
 
-    info "Instalando Ollama..."
+    info "Installing Ollama..."
 
-    # Instalador oficial atual para macOS/Linux.
+    # Current official installer for macOS/Linux.
     curl -fsSL https://ollama.com/install.sh | sh
 
-    # Alguns instaladores colocam o binário em local que só aparece num novo shell.
+    # Some installers place the binary somewhere that only shows up in a new shell.
     hash -r 2>/dev/null || true
 
     if ! have ollama; then
@@ -181,8 +181,8 @@ install_ollama() {
         done
     fi
 
-    have ollama || die "Ollama foi instalado, mas o comando 'ollama' não foi localizado no PATH."
-    ok "Ollama instalado."
+    have ollama || die "Ollama was installed, but the 'ollama' command was not found in PATH."
+    ok "Ollama installed."
 }
 
 configure_linux_service() {
@@ -190,10 +190,10 @@ configure_linux_service() {
     ollama_bin="$(command -v ollama)"
 
     if have systemctl && [[ "$(ps -p 1 -o comm= 2>/dev/null)" == "systemd" ]]; then
-        info "Configurando Ollama como serviço systemd..."
+        info "Configuring Ollama as a systemd service..."
 
-        # O instalador oficial normalmente cria este serviço.
-        # Se não existir, criamos um serviço mínimo.
+        # The official installer usually creates this service.
+        # If it doesn't exist, we create a minimal one.
         if ! systemctl cat ollama.service >/dev/null 2>&1; then
             local service_user
             service_user="${USER}"
@@ -220,15 +220,15 @@ EOF
 
         $SUDO systemctl daemon-reload
         $SUDO systemctl enable --now ollama
-        ok "Serviço Ollama ativo e habilitado no boot."
+        ok "Ollama service active and enabled on boot."
         return
     fi
 
     if [[ "$IS_WSL" -eq 1 ]]; then
-        warn "WSL sem systemd ativo. Configurando início do Ollama quando a distro WSL iniciar."
+        warn "WSL without systemd active. Configuring Ollama to start when the WSL distro boots."
 
-        # /etc/wsl.conf suporta comando de boot nas versões modernas do WSL.
-        # Preserva o arquivo e adiciona [boot] apenas quando ele ainda não possui command=.
+        # Modern WSL versions support a boot command in /etc/wsl.conf.
+        # This preserves the file and only adds [boot] when it doesn't already have a command=.
         if [[ -w /etc/wsl.conf ]] || [[ -n "$SUDO" ]]; then
             if ! grep -qE '^[[:space:]]*command[[:space:]]*=' /etc/wsl.conf 2>/dev/null; then
                 if ! grep -qE '^[[:space:]]*\[boot\][[:space:]]*$' /etc/wsl.conf 2>/dev/null; then
@@ -236,21 +236,21 @@ EOF
                 fi
                 printf 'command=%s serve >/var/log/ollama.log 2>&1 &\n' "$ollama_bin" |
                     $SUDO tee -a /etc/wsl.conf >/dev/null
-                ok "Ollama configurado no boot da distro WSL."
+                ok "Ollama configured to start on WSL distro boot."
             else
-                warn "/etc/wsl.conf já possui um comando [boot]. Não foi sobrescrito."
-                warn "Ative systemd no WSL ou incorpore manualmente: ${ollama_bin} serve"
+                warn "/etc/wsl.conf already has a [boot] command. It was not overwritten."
+                warn "Enable systemd in WSL or add manually: ${ollama_bin} serve"
             fi
         fi
 
-        # Inicia nesta sessão também.
+        # Also start it in this session.
         if ! curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
             nohup "$ollama_bin" serve >"$HOME/.ollama-serve.log" 2>&1 &
         fi
         return
     fi
 
-    warn "systemd não está ativo. Criando fallback no shell para iniciar Ollama sob demanda."
+    warn "systemd is not active. Creating a shell fallback to start Ollama on demand."
 }
 
 configure_macos_service() {
@@ -260,13 +260,13 @@ configure_macos_service() {
 
     mkdir -p "$HOME/Library/LaunchAgents" "$HOME/Library/Logs"
 
-    # Se o usuário usa Ollama.app ou Homebrew services, evite criar serviço duplicado.
+    # If the user already uses Ollama.app or Homebrew services, avoid creating a duplicate service.
     if launchctl list 2>/dev/null | grep -qE 'ollama|com\.ollama'; then
-        ok "Já existe um serviço Ollama registrado no launchd."
+        ok "An Ollama service is already registered in launchd."
         return
     fi
 
-    info "Criando LaunchAgent do Ollama..."
+    info "Creating Ollama LaunchAgent..."
 
     cat >"$plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -310,28 +310,28 @@ EOF
     launchctl bootstrap "gui/$(id -u)" "$plist"
     launchctl enable "gui/$(id -u)/com.terminal-ai.ollama" >/dev/null 2>&1 || true
 
-    ok "LaunchAgent criado. Ollama iniciará automaticamente no login do macOS."
+    ok "LaunchAgent created. Ollama will start automatically on macOS login."
 }
 
 wait_for_ollama() {
-    info "Aguardando o servidor Ollama..."
+    info "Waiting for the Ollama server..."
 
     for _ in {1..30}; do
         if curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1; then
-            ok "Servidor Ollama respondendo em 127.0.0.1:11434."
+            ok "Ollama server responding on 127.0.0.1:11434."
             return
         fi
         sleep 1
     done
 
-    # Último fallback em sistemas sem gerenciador de serviço.
+    # Last-resort fallback on systems without a service manager.
     if ! pgrep -f '[o]llama serve' >/dev/null 2>&1; then
         nohup "$(command -v ollama)" serve >"$HOME/.ollama-serve.log" 2>&1 &
         sleep 2
     fi
 
     curl -fsS http://127.0.0.1:11434/api/version >/dev/null 2>&1 ||
-        die "O servidor Ollama não respondeu. Veja os logs do serviço."
+        die "The Ollama server did not respond. Check the service logs."
 }
 
 download_model() {
@@ -340,18 +340,18 @@ download_model() {
     mkdir -p "$INSTALL_DIR"
 
     if [[ -s "$INSTALL_DIR/$file" ]]; then
-        ok "GGUF já existe: $INSTALL_DIR/$file"
+        ok "GGUF already exists: $INSTALL_DIR/$file"
         return
     fi
 
-    info "Baixando ${label} (${file})..."
+    info "Downloading ${label} (${file})..."
     curl -fL --retry 3 --retry-delay 2 \
         --progress-bar \
         "$url" \
         -o "$INSTALL_DIR/$file.part"
 
     mv "$INSTALL_DIR/$file.part" "$INSTALL_DIR/$file"
-    ok "${label} baixado."
+    ok "${label} downloaded."
 }
 
 compute_system_prompt() {
@@ -365,12 +365,18 @@ compute_system_prompt() {
         shell_prompt="$SHELL_NAME"
     fi
 
-    SYSTEM_PROMPT="You are a shell command generator. OS: ${os_prompt}, Shell: ${shell_prompt}. Output ONLY the command. Never wrap commands in markdown fences."
+    # Used by the default, developer (-d) and function-calling (-f) models,
+    # which only ever produce a shell command.
+    SYSTEM_PROMPT_SHELL="You are a shell command generator. OS: ${os_prompt}, Shell: ${shell_prompt}. Output ONLY the command. Never wrap commands in markdown fences."
+
+    # Used by the generalist model (-g), which answers questions directly
+    # instead of generating shell commands.
+    SYSTEM_PROMPT_GENERAL="You are a helpful, concise general-purpose assistant. Answer the user's question directly in plain text. Do not output a shell command unless the user explicitly asks you to."
 }
 
-# create_modelfile <arquivo .gguf> <caminho do Modelfile> <template: chatml|gemma>
+# create_modelfile <gguf file> <Modelfile path> <template: chatml|gemma> <system prompt>
 create_modelfile() {
-    local file="$1" modelfile_path="$2" template="$3"
+    local file="$1" modelfile_path="$2" template="$3" system_prompt="$4"
 
     case "$template" in
         chatml)
@@ -389,13 +395,13 @@ PARAMETER stop "<|im_end|>"
 PARAMETER temperature 0.1
 PARAMETER top_p 0.9
 
-SYSTEM """${SYSTEM_PROMPT}"""
+SYSTEM """${system_prompt}"""
 EOF
             ;;
         gemma)
-            # Gemma não possui papel "system" próprio: o conteúdo é embutido no
-            # primeiro turno do usuário, seguindo a convenção usada pela comunidade
-            # em Modelfiles do Ollama para a família Gemma.
+            # Gemma has no dedicated "system" role: the content is embedded in
+            # the first user turn, following the convention used by the community
+            # in Ollama Modelfiles for the Gemma family.
             cat >"$modelfile_path" <<EOF
 FROM ./${file}
 
@@ -411,27 +417,27 @@ PARAMETER stop "<end_of_turn>"
 PARAMETER temperature 0.1
 PARAMETER top_p 0.9
 
-SYSTEM """${SYSTEM_PROMPT}"""
+SYSTEM """${system_prompt}"""
 EOF
             ;;
         *)
-            die "Template de Modelfile desconhecido: ${template}"
+            die "Unknown Modelfile template: ${template}"
             ;;
     esac
 
-    ok "Modelfile criado em $modelfile_path"
+    ok "Modelfile created at $modelfile_path"
 }
 
-# register_model <nome no Ollama> <caminho do Modelfile>
+# register_model <name in Ollama> <Modelfile path>
 register_model() {
     local name="$1" modelfile_path="$2"
 
-    info "Registrando modelo '${name}' no Ollama..."
+    info "Registering model '${name}' in Ollama..."
     (
         cd "$(dirname "$modelfile_path")"
         ollama create "$name" -f "$(basename "$modelfile_path")"
     )
-    ok "Modelo '${name}' registrado."
+    ok "Model '${name}' registered."
 }
 
 create_ai_command() {
@@ -442,32 +448,32 @@ create_ai_command() {
 set -Eeuo pipefail
 
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
-MODEL_LABEL="${MODEL_NAME} (padrão · Qwen-0.5B-Coder-El-Terminalo)"
+MODEL_LABEL="${MODEL_NAME} (default · Qwen-0.5B-Coder-El-Terminalo)"
 
 usage() {
     cat <<'EOF'
-Uso:
-  ai "descrição do comando"
-  ai descrição do comando
-  ai -d "descrição do comando"   # modelo developer: Qwen2.5-Coder-0.5B-Instruct
-  ai -g "descrição do comando"   # modelo generalist: gemma-3-270m-it
-  ai -f "descrição do comando"   # modelo function-calling: FunctionGemma 270M
+Usage:
+  ai "description of the command"
+  ai description of the command
+  ai -d "description of the command"   # developer model: Qwen2.5-Coder-0.5B-Instruct
+  ai -g "description of the command"   # generalist model: gemma-3-270m-it
+  ai -f "description of the command"   # function-calling model: FunctionGemma 270M
 
-Exemplo:
-  ai "mostrar os 10 processos que mais usam memória"
-  ai -d "escrever uma função em python que ordena uma lista"
+Example:
+  ai "show the 10 processes using the most memory"
+  ai -d "write a python function that sorts a list"
 
-Após gerar o comando:
-  e = executar
-  c = copiar
-  q = cancelar
-  ENTER = cancelar
+After the command is generated:
+  e = execute
+  c = copy
+  q = cancel
+  ENTER = cancel
 
-Variáveis:
-  TERMINAL_AI_MODEL      (padrão,          padrão: terminal)
-  TERMINAL_AI_MODEL_DEV  (-d, developer,   padrão: terminal-dev)
-  TERMINAL_AI_MODEL_GEN  (-g, generalist,  padrão: terminal-gen)
-  TERMINAL_AI_MODEL_FN   (-f, function,    padrão: terminal-fn)
+Variables:
+  TERMINAL_AI_MODEL      (default,          default: terminal)
+  TERMINAL_AI_MODEL_DEV  (-d, developer,    default: terminal-dev)
+  TERMINAL_AI_MODEL_GEN  (-g, generalist,   default: terminal-gen)
+  TERMINAL_AI_MODEL_FN   (-f, function,     default: terminal-fn)
 EOF
 }
 
@@ -492,7 +498,7 @@ while getopts ":dgfh" OPT; do
             exit 0
             ;;
         \?)
-            printf 'Opção inválida: -%s\n\n' "$OPTARG" >&2
+            printf 'Invalid option: -%s\n\n' "$OPTARG" >&2
             usage
             exit 1
             ;;
@@ -511,7 +517,7 @@ CWD="$PWD"
 
 PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}"
 
-# remove CR, fences ocasionais e linhas vazias nas extremidades
+# strip CR, occasional fences, and blank lines at the edges
 CMD="$(
     ollama run "$MODEL_NAME" "$PROMPT" |
     tr -d '\r' |
@@ -520,20 +526,20 @@ CMD="$(
 )"
 
 if [[ -z "$CMD" ]]; then
-    printf 'Nenhum comando foi gerado.\n' >&2
+    printf 'No command was generated.\n' >&2
     exit 2
 fi
 
 printf '\n\033[2m[LLM: %s]\033[0m\n' "$MODEL_LABEL"
 printf '\n\033[1;36m%s\033[0m\n\n' "$CMD"
-printf '[e] executar  [c] copiar  [q/Enter] cancelar: '
+printf '[e] execute  [c] copy  [q/Enter] cancel: '
 IFS= read -r -n 1 ACTION || true
 printf '\n'
 
 case "${ACTION:-}" in
     e|E)
-        printf '\033[1;33mExecutando:\033[0m %s\n' "$CMD"
-        # Executa no shell atual escolhido pelo usuário.
+        printf '\033[1;33mExecuting:\033[0m %s\n' "$CMD"
+        # Runs in the current shell chosen by the user.
         "${SHELL:-/bin/bash}" -lc "$CMD"
         ;;
     c|C)
@@ -548,19 +554,19 @@ case "${ACTION:-}" in
         elif command -v clip.exe >/dev/null 2>&1; then
             printf '%s' "$CMD" | clip.exe
         else
-            printf 'Nenhum utilitário de clipboard encontrado.\n' >&2
+            printf 'No clipboard utility found.\n' >&2
             exit 3
         fi
-        printf 'Copiado para o clipboard.\n'
+        printf 'Copied to clipboard.\n'
         ;;
     *)
-        printf 'Cancelado.\n'
+        printf 'Cancelled.\n'
         ;;
 esac
 AI_SCRIPT
 
     chmod +x "$AI_BIN"
-    ok "Comando criado: $AI_BIN"
+    ok "Command created: $AI_BIN"
 }
 
 configure_shell() {
@@ -569,7 +575,7 @@ configure_shell() {
     local begin="# >>> terminal-ai >>>"
     local end="# <<< terminal-ai <<<"
 
-    # Remove bloco antigo para manter instalação idempotente.
+    # Remove old block to keep the installation idempotent.
     if grep -Fq "$begin" "$RC_FILE"; then
         awk -v b="$begin" -v e="$end" '
             $0 == b {skip=1; next}
@@ -579,7 +585,7 @@ configure_shell() {
         mv "${RC_FILE}.tmp" "$RC_FILE"
     fi
 
-    # Remove linhas em branco finais para não acumular espaço a cada reinstalação.
+    # Remove trailing blank lines so they don't pile up on every reinstall.
     awk '
         { lines[NR] = $0 }
         END {
@@ -605,20 +611,20 @@ ai() {
 ${end}
 EOF
 
-    ok "Função ai() adicionada em $RC_FILE"
+    ok "ai() function added to $RC_FILE"
 }
 
 smoke_test() {
     local name="$1" label="$2"
     local result
 
-    info "Testando o modelo '${name}' (${label})..."
+    info "Testing model '${name}' (${label})..."
     result="$(ollama run "$name" "OS: linux. Shell: bash. Request: list running docker containers" 2>/dev/null || true)"
 
     if [[ -n "$result" ]]; then
-        printf '\nTeste do modelo (%s):\n  %s\n\n' "$label" "$result"
+        printf '\nModel test (%s):\n  %s\n\n' "$label" "$result"
     else
-        warn "O modelo '${name}' foi instalado, mas o teste não retornou conteúdo."
+        warn "Model '${name}' was installed, but the test returned no content."
     fi
 }
 
@@ -645,53 +651,53 @@ main() {
     wait_for_ollama
     compute_system_prompt
 
-    download_model "$MODEL_FILE" "$MODEL_URL" "Qwen-0.5B-Coder-El-Terminalo (padrão)"
-    create_modelfile "$MODEL_FILE" "$INSTALL_DIR/Modelfile" chatml
+    download_model "$MODEL_FILE" "$MODEL_URL" "Qwen-0.5B-Coder-El-Terminalo (default)"
+    create_modelfile "$MODEL_FILE" "$INSTALL_DIR/Modelfile" chatml "$SYSTEM_PROMPT_SHELL"
     register_model "$MODEL_NAME" "$INSTALL_DIR/Modelfile"
 
     download_model "$MODEL_FILE_DEV" "$MODEL_URL_DEV" "Qwen2.5-Coder-0.5B-Instruct (developer)"
-    create_modelfile "$MODEL_FILE_DEV" "$INSTALL_DIR/Modelfile.dev" chatml
+    create_modelfile "$MODEL_FILE_DEV" "$INSTALL_DIR/Modelfile.dev" chatml "$SYSTEM_PROMPT_SHELL"
     register_model "$MODEL_NAME_DEV" "$INSTALL_DIR/Modelfile.dev"
 
     download_model "$MODEL_FILE_GEN" "$MODEL_URL_GEN" "gemma-3-270m-it (generalist)"
-    create_modelfile "$MODEL_FILE_GEN" "$INSTALL_DIR/Modelfile.gen" gemma
+    create_modelfile "$MODEL_FILE_GEN" "$INSTALL_DIR/Modelfile.gen" gemma "$SYSTEM_PROMPT_GENERAL"
     register_model "$MODEL_NAME_GEN" "$INSTALL_DIR/Modelfile.gen"
 
     download_model "$MODEL_FILE_FN" "$MODEL_URL_FN" "FunctionGemma 270M (function-calling)"
-    create_modelfile "$MODEL_FILE_FN" "$INSTALL_DIR/Modelfile.fn" gemma
+    create_modelfile "$MODEL_FILE_FN" "$INSTALL_DIR/Modelfile.fn" gemma "$SYSTEM_PROMPT_SHELL"
     register_model "$MODEL_NAME_FN" "$INSTALL_DIR/Modelfile.fn"
 
     create_ai_command
     configure_shell
 
-    smoke_test "$MODEL_NAME" "padrão"
+    smoke_test "$MODEL_NAME" "default"
     smoke_test "$MODEL_NAME_DEV" "developer"
     smoke_test "$MODEL_NAME_GEN" "generalist"
     smoke_test "$MODEL_NAME_FN" "function-calling"
 
     cat <<EOF
 
-Instalação concluída.
+Installation complete.
 
-Abra um novo terminal ou execute:
+Open a new terminal or run:
 
     source "$RC_FILE"
 
-Exemplos:
+Examples:
 
-    ai "mostrar os 10 processos que mais consomem memória"
-    ai "mostrar containers docker em execução"
-    ai -d "escrever uma função em python que ordena uma lista"
-    ai -g "explicar o que é um endereço IP"
-    ai -f "encontrar arquivos maiores que 1 GB em /var"
+    ai "show the 10 processes using the most memory"
+    ai "list running docker containers"
+    ai -d "write a python function that sorts a list"
+    ai -g "explain what an IP address is"
+    ai -f "find files larger than 1 GB in /var"
 
-Modelos:
-    ${MODEL_NAME}      (padrão          · Qwen-0.5B-Coder-El-Terminalo)
+Models:
+    ${MODEL_NAME}      (default         · Qwen-0.5B-Coder-El-Terminalo)
     ${MODEL_NAME_DEV}  (-d, developer   · Qwen2.5-Coder-0.5B-Instruct)
     ${MODEL_NAME_GEN}  (-g, generalist  · gemma-3-270m-it)
     ${MODEL_NAME_FN}   (-f, function    · FunctionGemma 270M)
 
-Arquivos:
+Files:
     ${INSTALL_DIR}/${MODEL_FILE}
     ${INSTALL_DIR}/${MODEL_FILE_DEV}
     ${INSTALL_DIR}/${MODEL_FILE_GEN}
@@ -699,10 +705,10 @@ Arquivos:
     ${INSTALL_DIR}/Modelfile{,.dev,.gen,.fn}
     ${AI_BIN}
 
-Cada resposta do comando 'ai' exibe qual LLM foi usado para gerá-la.
+Every response from the 'ai' command shows which LLM generated it.
 
-O comando gerado NÃO é executado automaticamente.
-Você precisa escolher [e] para executá-lo.
+The generated command is NOT executed automatically.
+You need to choose [e] to run it.
 
 EOF
 }
