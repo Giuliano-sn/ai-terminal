@@ -697,14 +697,40 @@ shift $((OPTIND - 1))
 
 [[ $# -gt 0 ]] || { usage; exit 1; }
 
+# detect_system_language: maps the OS locale (LC_ALL/LC_MESSAGES/LANG) to a
+# language name, so the model can be told to answer in it.
+detect_system_language() {
+    local loc="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US}}}"
+    local code="${loc%%.*}"
+    code="${code%%_*}"
+    case "$code" in
+        pt) printf 'Portuguese' ;;
+        es) printf 'Spanish' ;;
+        fr) printf 'French' ;;
+        de) printf 'German' ;;
+        it) printf 'Italian' ;;
+        ja) printf 'Japanese' ;;
+        zh) printf 'Chinese' ;;
+        ru) printf 'Russian' ;;
+        ko) printf 'Korean' ;;
+        nl) printf 'Dutch' ;;
+        pl) printf 'Polish' ;;
+        tr) printf 'Turkish' ;;
+        ar) printf 'Arabic' ;;
+        hi) printf 'Hindi' ;;
+        *)  printf 'English' ;;
+    esac
+}
+
 QUERY="$*"
 OS_NAME="linux"
 [[ "$(uname -s)" == "Darwin" ]] && OS_NAME="macos"
 
 SHELL_NAME="$(basename "${SHELL:-bash}")"
 CWD="$PWD"
+SYSTEM_LANGUAGE="$(detect_system_language)"
 
-PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}"
+PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}. Respond in ${SYSTEM_LANGUAGE}."
 
 # strip CR, occasional fences, and blank lines at the edges
 CMD="$(
