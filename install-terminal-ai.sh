@@ -4,7 +4,10 @@
 # Installs and configures:
 #   - Ollama
 #   - Ollama service (systemd on Linux, LaunchAgent on macOS)
-#   - default model: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF ("terminal")
+#   - default model ("terminal"), chosen from the detected hardware:
+#       * AMD/NVIDIA GPU with >= 8 GB VRAM: qwen3.5:4b-q4_K_M with a 128k context
+#       * otherwise: Qwen-0.5B-Coder-El-Terminalo Q8 GGUF
+#     Re-running the installer re-detects the hardware and updates it.
 #   - developer model (-d): Qwen2.5-Coder-0.5B-Instruct Q4_K_M ("terminal-dev")
 #   - generalist model (-g): meta-llama/Llama-3.2-1B-Instruct Q4_K_M ("terminal-gen")
 #   - function-calling model (-f): FunctionGemma 270M Q4_K_M ("terminal-fn")
@@ -23,6 +26,8 @@
 # Optional variables:
 #   MODEL_NAME=terminal ./install-terminal-ai.sh
 #   INSTALL_DIR="$HOME/.local/share/terminal-ai" ./install-terminal-ai.sh
+#   HW_PROFILE=cpu ./install-terminal-ai.sh      # auto (default) | gpu | cpu
+#   GPU_MIN_VRAM_MB=7680 GPU_NUM_CTX=131072 ./install-terminal-ai.sh
 #
 set -Eeuo pipefail
 
@@ -50,10 +55,34 @@ MODEL_REPO_FN="unsloth/functiongemma-270m-it-GGUF"
 MODEL_FILE_FN="functiongemma-270m-it-Q4_K_M.gguf"
 MODEL_URL_FN="https://huggingface.co/${MODEL_REPO_FN}/resolve/main/${MODEL_FILE_FN}?download=true"
 
+# GPU profile: when an AMD or NVIDIA GPU with enough VRAM is detected, the
+# default model ("terminal") is built on top of this Ollama library model
+# instead of the CPU-friendly El-Terminalo GGUF, with a large context window.
+GPU_MODEL="${GPU_MODEL:-qwen3.5:4b-q4_K_M}"
+GPU_MODEL_DESC="${GPU_MODEL_DESC:-Qwen3.5-4B Q4_K_M}"
+GPU_NUM_CTX="${GPU_NUM_CTX:-131072}"
+# Cards sold as "8 GB" report slightly less than 8192 MiB (the driver/firmware
+# reserves part of it), so the threshold leaves some slack.
+GPU_MIN_VRAM_MB="${GPU_MIN_VRAM_MB:-7680}"
+# auto = detect hardware on every run; gpu / cpu = force a profile.
+HW_PROFILE="${HW_PROFILE:-auto}"
+
 INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/share/terminal-ai}"
 HARNESS_DIR="${INSTALL_DIR}/harness"
+PROFILE_FILE="${INSTALL_DIR}/profile"
 BIN_DIR="${HOME}/.local/bin"
 AI_BIN="${BIN_DIR}/ai"
+
+# Filled by detect_gpu / select_profile / install_default_model.
+GPU_VENDOR=""
+GPU_NAME=""
+GPU_VRAM_MB=0
+PROFILE=""
+PREV_PROFILE=""
+PREV_OWNED_BASE_MODEL=""
+DEFAULT_MODEL_DESC=""
+DEFAULT_MODEL_NO_THINK=0
+OWNED_BASE_MODEL=""
 
 OS_FAMILY=""
 DISTRO=""
@@ -464,6 +493,287 @@ register_model() {
     ok "Model '${name}' registered."
 }
 
+# model_exists <name>: true if the model is present in Ollama.
+model_exists() {
+    have ollama || return 1
+    local name="$1"
+    # Ollama lists library models as "name:tag" and local ones as "name:latest".
+    [[ "$name" == *:* ]] || name="${name}:latest"
+    ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qxF "$name"
+}
+
+# mb_to_gb <MiB>: prints the value in GB with one decimal place.
+mb_to_gb() {
+    awk -v mb="$1" 'BEGIN { printf "%.1f", mb / 1024 }'
+}
+
+# detect_gpu: finds the AMD or NVIDIA GPU with the most VRAM and fills
+# GPU_VENDOR, GPU_NAME and GPU_VRAM_MB (0 when nothing is found).
+detect_gpu() {
+    GPU_VENDOR=""
+    GPU_NAME=""
+    GPU_VRAM_MB=0
+
+    local name mb smi=""
+
+    # NVIDIA (Linux, WSL). On WSL the binary lives in /usr/lib/wsl/lib and is
+    # not always in PATH.
+    if have nvidia-smi; then
+        smi="nvidia-smi"
+    elif [[ -x /usr/lib/wsl/lib/nvidia-smi ]]; then
+        smi="/usr/lib/wsl/lib/nvidia-smi"
+    fi
+
+    if [[ -n "$smi" ]]; then
+        while IFS=',' read -r name mb; do
+            mb="${mb//[^0-9]/}"
+            [[ -n "$mb" ]] || continue
+            if (( mb > GPU_VRAM_MB )); then
+                GPU_VENDOR="NVIDIA"
+                GPU_NAME="$(printf '%s' "$name" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+                GPU_VRAM_MB="$mb"
+            fi
+        done < <("$smi" --query-gpu=name,memory.total --format=csv,noheader,nounits 2>/dev/null || true)
+    fi
+
+    # AMD (Linux): the amdgpu driver exposes the VRAM size in sysfs, which
+    # works with or without ROCm tools installed.
+    if [[ "$OS_FAMILY" == "linux" ]]; then
+        local card dev bytes slot
+        for card in /sys/class/drm/card[0-9]*; do
+            [[ "$(basename "$card")" == *-* ]] && continue   # connectors (card1-DP-1, ...)
+            dev="$card/device"
+            [[ "$(cat "$dev/vendor" 2>/dev/null)" == "0x1002" ]] || continue
+            bytes="$(cat "$dev/mem_info_vram_total" 2>/dev/null || true)"
+            [[ "$bytes" =~ ^[0-9]+$ ]] || continue
+            mb=$(( bytes / 1048576 ))
+            if (( mb > GPU_VRAM_MB )); then
+                name="AMD GPU"
+                if have lspci; then
+                    slot="$(basename "$(readlink -f "$dev")")"
+                    name="$(lspci -s "$slot" 2>/dev/null | head -n1 |
+                        sed -E -e 's/^[^ ]+ [^:]+: //' \
+                               -e 's/Advanced Micro Devices, Inc\. \[AMD\/ATI\] //' \
+                               -e 's/ \(rev [0-9a-f]+\)$//' || true)"
+                    [[ -n "$name" ]] || name="AMD GPU"
+                fi
+                GPU_VENDOR="AMD"
+                GPU_NAME="$name"
+                GPU_VRAM_MB="$mb"
+            fi
+        done
+    fi
+}
+
+# read_previous_profile: loads what the last install run recorded, so a re-run
+# can report changes and clean up a base model it no longer needs.
+read_previous_profile() {
+    PREV_PROFILE=""
+    PREV_OWNED_BASE_MODEL=""
+    [[ -r "$PROFILE_FILE" ]] || return 0
+    PREV_PROFILE="$(sed -n 's/^PROFILE=//p' "$PROFILE_FILE" | head -n1)"
+    PREV_OWNED_BASE_MODEL="$(sed -n 's/^OWNED_BASE_MODEL=//p' "$PROFILE_FILE" | head -n1)"
+    # %q writes an empty value as ''.
+    [[ "$PREV_OWNED_BASE_MODEL" == "''" ]] && PREV_OWNED_BASE_MODEL=""
+}
+
+select_profile() {
+    read_previous_profile
+    detect_gpu
+
+    if (( GPU_VRAM_MB > 0 )); then
+        info "GPU detected: ${GPU_VENDOR} ${GPU_NAME} ($(mb_to_gb "$GPU_VRAM_MB") GB VRAM)"
+    else
+        info "No dedicated AMD/NVIDIA GPU detected."
+    fi
+
+    case "$HW_PROFILE" in
+        gpu|cpu)
+            PROFILE="$HW_PROFILE"
+            info "Hardware profile forced via HW_PROFILE: ${PROFILE}"
+            ;;
+        auto)
+            if (( GPU_VRAM_MB >= GPU_MIN_VRAM_MB )); then
+                PROFILE="gpu"
+                info "Profile: gpu (VRAM >= $(mb_to_gb "$GPU_MIN_VRAM_MB") GB) -> default model ${GPU_MODEL}, ${GPU_NUM_CTX} context."
+            else
+                PROFILE="cpu"
+                info "Profile: cpu -> default model Qwen-0.5B-Coder-El-Terminalo."
+            fi
+            ;;
+        *)
+            die "Invalid HW_PROFILE '${HW_PROFILE}' (use auto, gpu or cpu)."
+            ;;
+    esac
+
+    if [[ -n "$PREV_PROFILE" && "$PREV_PROFILE" != "$PROFILE" ]]; then
+        info "Hardware profile changed since the last install: ${PREV_PROFILE} -> ${PROFILE}. Updating the default model."
+    fi
+}
+
+OLLAMA_DROPIN_DIR="/etc/systemd/system/ollama.service.d"
+OLLAMA_DROPIN="${OLLAMA_DROPIN_DIR}/terminal-ai.conf"
+
+has_systemd() {
+    have systemctl && [[ "$(ps -p 1 -o comm= 2>/dev/null)" == "systemd" ]]
+}
+
+# install_gpu_backend: Arch-family distros package Ollama's GPU runtimes
+# separately from the CPU-only "ollama" package. Without them the GPU profile
+# would silently run on the CPU. (The official installer used on other
+# distros already bundles CUDA/ROCm.)
+install_gpu_backend() {
+    [[ "$OS_FAMILY" == "linux" ]] || return 0
+    have pacman || return 0
+    pacman -Qq ollama >/dev/null 2>&1 || return 0
+
+    local pkg=""
+    case "$GPU_VENDOR" in
+        NVIDIA) pkg="ollama-cuda" ;;
+        # Vulkan (RADV) also covers consumer RDNA cards that ROCm does not
+        # officially support (e.g. RX 6600 / gfx1032).
+        AMD)    pkg="ollama-vulkan" ;;
+        *)      return 0 ;;
+    esac
+
+    if pacman -Qq "$pkg" >/dev/null 2>&1; then
+        ok "Ollama GPU backend already installed: ${pkg}"
+        return 0
+    fi
+
+    info "Installing Ollama GPU backend for ${GPU_VENDOR}: ${pkg}..."
+    if $SUDO pacman -S --needed --noconfirm "$pkg"; then
+        ok "${pkg} installed."
+    else
+        warn "Could not install ${pkg}; the model will run on the CPU."
+    fi
+}
+
+# configure_gpu_service: systemd drop-in that makes the large context fit in
+# VRAM (flash attention + 8-bit KV cache roughly halves the KV cache size) and
+# enables the Vulkan backend. Removed again when the profile is cpu.
+configure_gpu_service() {
+    has_systemd || return 0
+    systemctl cat ollama.service >/dev/null 2>&1 || return 0
+
+    local content
+    content="# Managed by install-terminal-ai.sh (GPU profile); rewritten/removed on every install run.
+[Service]
+Environment=\"OLLAMA_FLASH_ATTENTION=1\"
+Environment=\"OLLAMA_KV_CACHE_TYPE=q8_0\""
+    [[ "$GPU_VENDOR" == "AMD" ]] && content+="
+Environment=\"OLLAMA_VULKAN=1\""
+
+    if [[ "$PROFILE" == "gpu" ]]; then
+        if [[ "$(cat "$OLLAMA_DROPIN" 2>/dev/null)" == "$content" ]]; then
+            ok "Ollama service already tuned for the GPU profile."
+            return 0
+        fi
+        info "Tuning the Ollama service for the GPU profile (${OLLAMA_DROPIN})..."
+        $SUDO mkdir -p "$OLLAMA_DROPIN_DIR"
+        printf '%s\n' "$content" | $SUDO tee "$OLLAMA_DROPIN" >/dev/null
+    else
+        [[ -f "$OLLAMA_DROPIN" ]] || return 0
+        info "Removing the GPU tuning from the Ollama service..."
+        $SUDO rm -f "$OLLAMA_DROPIN"
+    fi
+
+    $SUDO systemctl daemon-reload
+    $SUDO systemctl restart ollama
+    wait_for_ollama
+}
+
+create_gpu_modelfile() {
+    local modelfile_path="$1" system_prompt="$2"
+
+    # No TEMPLATE: the chat template (and its stop tokens) is inherited from
+    # the Ollama library model.
+    cat >"$modelfile_path" <<EOF
+FROM ${GPU_MODEL}
+
+PARAMETER num_ctx ${GPU_NUM_CTX}
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+
+SYSTEM """${system_prompt}"""
+EOF
+
+    ok "Modelfile created at $modelfile_path"
+}
+
+# install_default_model: builds the default model ("terminal") for the
+# selected hardware profile. Falls back to the CPU model if the GPU model
+# cannot be pulled.
+install_default_model() {
+    OWNED_BASE_MODEL=""
+
+    if [[ "$PROFILE" == "gpu" ]]; then
+        local already_present=0
+        model_exists "$GPU_MODEL" && already_present=1
+
+        info "Pulling ${GPU_MODEL} (${GPU_MODEL_DESC}) from the Ollama library..."
+        local pulled=0
+        if ollama pull "$GPU_MODEL"; then
+            pulled=1
+        elif [[ "$already_present" -eq 1 ]]; then
+            warn "Could not update ${GPU_MODEL}; using the copy already present in Ollama."
+            pulled=1
+        fi
+
+        if [[ "$pulled" -eq 1 ]]; then
+            # Only models this installer pulled itself are removed later.
+            if [[ "$already_present" -eq 0 || "$PREV_OWNED_BASE_MODEL" == "$GPU_MODEL" ]]; then
+                OWNED_BASE_MODEL="$GPU_MODEL"
+            fi
+
+            create_gpu_modelfile "$INSTALL_DIR/Modelfile" "$SYSTEM_PROMPT_SHELL"
+            register_model "$MODEL_NAME" "$INSTALL_DIR/Modelfile"
+
+            DEFAULT_MODEL_DESC="${GPU_MODEL_DESC} · GPU · $(( GPU_NUM_CTX / 1024 ))k ctx"
+            DEFAULT_MODEL_NO_THINK=1
+            return
+        fi
+
+        warn "Could not pull ${GPU_MODEL}. It requires a recent Ollama version."
+        warn "Update Ollama (curl -fsSL https://ollama.com/install.sh | sh) and run this installer again."
+        warn "Falling back to the CPU model for now."
+        PROFILE="cpu"
+    fi
+
+    download_model "$MODEL_FILE" "$MODEL_URL" "Qwen-0.5B-Coder-El-Terminalo (default)"
+    create_modelfile "$MODEL_FILE" "$INSTALL_DIR/Modelfile" chatml "$SYSTEM_PROMPT_SHELL"
+    register_model "$MODEL_NAME" "$INSTALL_DIR/Modelfile"
+
+    DEFAULT_MODEL_DESC="Qwen-0.5B-Coder-El-Terminalo"
+    DEFAULT_MODEL_NO_THINK=0
+}
+
+# cleanup_previous_base_model: removes a base model that a previous run pulled
+# and that the current profile no longer uses (e.g. the GPU went away).
+cleanup_previous_base_model() {
+    [[ -n "$PREV_OWNED_BASE_MODEL" ]] || return 0
+    [[ "$PREV_OWNED_BASE_MODEL" == "$OWNED_BASE_MODEL" ]] && return 0
+    [[ "$PROFILE" == "gpu" && "$PREV_OWNED_BASE_MODEL" == "$GPU_MODEL" ]] && return 0
+
+    info "Removing base model no longer used: ${PREV_OWNED_BASE_MODEL}"
+    remove_model "$PREV_OWNED_BASE_MODEL"
+}
+
+# write_profile: records the hardware profile for the 'ai' command (label,
+# thinking flag) and for the next install run. Rewritten on every run.
+write_profile() {
+    mkdir -p "$INSTALL_DIR"
+    {
+        printf '# Generated by install-terminal-ai.sh; rewritten on every install run.\n'
+        printf 'PROFILE=%s\n' "$PROFILE"
+        printf 'DEFAULT_MODEL_DESC=%q\n' "$DEFAULT_MODEL_DESC"
+        printf 'DEFAULT_MODEL_NO_THINK=%s\n' "$DEFAULT_MODEL_NO_THINK"
+        printf 'OWNED_BASE_MODEL=%q\n' "$OWNED_BASE_MODEL"
+        printf 'GPU=%q\n' "${GPU_VENDOR:+${GPU_VENDOR} ${GPU_NAME} ($(mb_to_gb "$GPU_VRAM_MB") GB VRAM)}"
+    } >"$PROFILE_FILE"
+    ok "Hardware profile saved to $PROFILE_FILE"
+}
+
 # write_harness_file <path> <starter content>: creates the harness file with
 # starter content only if it doesn't already exist, so a reinstall never
 # overwrites the user's edits.
@@ -511,8 +821,22 @@ create_ai_command() {
 set -Eeuo pipefail
 
 MODEL_NAME="${TERMINAL_AI_MODEL:-terminal}"
-MODEL_LABEL="${MODEL_NAME} (default · Qwen-0.5B-Coder-El-Terminalo)"
 HARNESS_DIR="${TERMINAL_AI_HARNESS_DIR:-$HOME/.local/share/terminal-ai/harness}"
+
+# Hardware profile written by the installer (re-detected on every install
+# run): tells which model backs the default "terminal" model.
+DEFAULT_MODEL_DESC="Qwen-0.5B-Coder-El-Terminalo"
+DEFAULT_MODEL_NO_THINK=0
+PROFILE_FILE="$(dirname "$HARNESS_DIR")/profile"
+if [[ -r "$PROFILE_FILE" ]]; then
+    # shellcheck disable=SC1090
+    . "$PROFILE_FILE"
+fi
+
+MODEL_LABEL="${MODEL_NAME} (default · ${DEFAULT_MODEL_DESC})"
+# Thinking-capable models (GPU profile) would print their reasoning before
+# the command; it is disabled for them.
+NO_THINK="$DEFAULT_MODEL_NO_THINK"
 HARNESS_NAME="default"
 IS_DEV=0
 IS_GEN=0
@@ -747,17 +1071,20 @@ while getopts ":dgfhH" OPT; do
             MODEL_LABEL="${MODEL_NAME} (developer · Qwen2.5-Coder-0.5B-Instruct)"
             HARNESS_NAME="developer"
             IS_DEV=1
+            NO_THINK=0
             ;;
         g)
             MODEL_NAME="${TERMINAL_AI_MODEL_GEN:-terminal-gen}"
             MODEL_LABEL="${MODEL_NAME} (generalist · Llama-3.2-1B-Instruct)"
             HARNESS_NAME="generalist"
             IS_GEN=1
+            NO_THINK=0
             ;;
         f)
             MODEL_NAME="${TERMINAL_AI_MODEL_FN:-terminal-fn}"
             MODEL_LABEL="${MODEL_NAME} (function-calling · FunctionGemma 270M)"
             HARNESS_NAME="function"
+            NO_THINK=0
             ;;
         h)
             usage
@@ -840,8 +1167,16 @@ HARNESS_TEXT="$(read_harness "$HARNESS_NAME")"
 PROMPT="OS: ${OS_NAME}. Shell: ${SHELL_NAME}. Current directory: ${CWD}. Request: ${QUERY}. Respond in ${SYSTEM_LANGUAGE}.${HARNESS_TEXT:+ ${HARNESS_TEXT}}"
 
 # strip CR, occasional fences, and blank lines at the edges
+run_model() {
+    if [[ "$NO_THINK" -eq 1 ]]; then
+        ollama run --think=false "$MODEL_NAME" "$PROMPT"
+    else
+        ollama run "$MODEL_NAME" "$PROMPT"
+    fi
+}
+
 CMD="$(
-    ollama run "$MODEL_NAME" "$PROMPT" |
+    run_model |
     tr -d '\r' |
     sed -e '/^[[:space:]]*```/d' \
         -e '/^[[:space:]]*$/d'
@@ -958,12 +1293,17 @@ EOF
     ok "ai() function added to $RC_FILE"
 }
 
+# smoke_test <name> <label> [no-think: 0|1]
 smoke_test() {
-    local name="$1" label="$2"
-    local result
+    local name="$1" label="$2" no_think="${3:-0}"
+    local result prompt="OS: linux. Shell: bash. Request: list running docker containers"
 
     info "Testing model '${name}' (${label})..."
-    result="$(ollama run "$name" "OS: linux. Shell: bash. Request: list running docker containers" 2>/dev/null || true)"
+    if [[ "$no_think" -eq 1 ]]; then
+        result="$(ollama run --think=false "$name" "$prompt" 2>/dev/null || true)"
+    else
+        result="$(ollama run "$name" "$prompt" 2>/dev/null || true)"
+    fi
 
     if [[ -n "$result" ]]; then
         printf '\nModel test (%s):\n  %s\n\n' "$label" "$result"
@@ -977,7 +1317,7 @@ remove_model() {
 
     have ollama || return 0
 
-    if ollama list 2>/dev/null | awk 'NR>1{print $1}' | grep -qx "$name"; then
+    if model_exists "$name"; then
         if ollama rm "$name" >/dev/null 2>&1; then
             ok "Model '${name}' removed."
         else
@@ -996,6 +1336,21 @@ remove_all() {
     remove_model "$MODEL_NAME_DEV"
     remove_model "$MODEL_NAME_GEN"
     remove_model "$MODEL_NAME_FN"
+
+    # Base model pulled by the GPU profile (only if this installer pulled it).
+    read_previous_profile
+    if [[ -n "$PREV_OWNED_BASE_MODEL" ]]; then
+        remove_model "$PREV_OWNED_BASE_MODEL"
+    fi
+
+    if [[ -f "$OLLAMA_DROPIN" ]]; then
+        $SUDO rm -f "$OLLAMA_DROPIN"
+        if has_systemd; then
+            $SUDO systemctl daemon-reload
+            $SUDO systemctl try-restart ollama || true
+        fi
+        ok "GPU tuning removed from the Ollama service: $OLLAMA_DROPIN"
+    fi
 
     if [[ -d "$INSTALL_DIR" ]]; then
         rm -rf "$INSTALL_DIR"
@@ -1052,10 +1407,11 @@ EOF
 }
 
 main() {
-    printf '\n=== Terminal AI / Qwen 0.5B installer ===\n\n'
+    printf '\n=== Terminal AI installer ===\n\n'
 
     setup_sudo
     detect_os
+    select_profile
 
     if [[ "$OS_FAMILY" == "macos" ]]; then
         install_macos_requirements
@@ -1074,9 +1430,11 @@ main() {
     wait_for_ollama
     compute_system_prompt
 
-    download_model "$MODEL_FILE" "$MODEL_URL" "Qwen-0.5B-Coder-El-Terminalo (default)"
-    create_modelfile "$MODEL_FILE" "$INSTALL_DIR/Modelfile" chatml "$SYSTEM_PROMPT_SHELL"
-    register_model "$MODEL_NAME" "$INSTALL_DIR/Modelfile"
+    [[ "$PROFILE" == "gpu" ]] && install_gpu_backend
+    install_default_model
+    configure_gpu_service
+    cleanup_previous_base_model
+    write_profile
 
     download_model "$MODEL_FILE_DEV" "$MODEL_URL_DEV" "Qwen2.5-Coder-0.5B-Instruct (developer)"
     create_modelfile "$MODEL_FILE_DEV" "$INSTALL_DIR/Modelfile.dev" chatml "$SYSTEM_PROMPT_SHELL"
@@ -1094,7 +1452,7 @@ main() {
     create_ai_command
     configure_shell
 
-    smoke_test "$MODEL_NAME" "default"
+    smoke_test "$MODEL_NAME" "default" "$DEFAULT_MODEL_NO_THINK"
     smoke_test "$MODEL_NAME_DEV" "developer"
     smoke_test "$MODEL_NAME_GEN" "generalist"
     smoke_test "$MODEL_NAME_FN" "function-calling"
@@ -1116,14 +1474,18 @@ Examples:
     ai -f "find files larger than 1 GB in /var"
     ai -H -g                            # edit the generalist model's harness
 
+Hardware profile: ${PROFILE}${GPU_VENDOR:+ (${GPU_VENDOR} ${GPU_NAME}, $(mb_to_gb "$GPU_VRAM_MB") GB VRAM)}
+Run this installer again at any time to re-detect the hardware and update
+the default model (e.g. after installing or removing a GPU).
+
 Models:
-    ${MODEL_NAME}      (default         · Qwen-0.5B-Coder-El-Terminalo)
+    ${MODEL_NAME}      (default         · ${DEFAULT_MODEL_DESC})
     ${MODEL_NAME_DEV}  (-d, developer   · Qwen2.5-Coder-0.5B-Instruct)
     ${MODEL_NAME_GEN}  (-g, generalist  · Llama-3.2-1B-Instruct)
     ${MODEL_NAME_FN}   (-f, function    · FunctionGemma 270M)
 
 Files:
-    ${INSTALL_DIR}/${MODEL_FILE}
+    ${PROFILE_FILE}
     ${INSTALL_DIR}/${MODEL_FILE_DEV}
     ${INSTALL_DIR}/${MODEL_FILE_GEN}
     ${INSTALL_DIR}/${MODEL_FILE_FN}

@@ -23,6 +23,7 @@ ps aux --sort=-%mem | head -n 11
 - **Review before you run** — every generated command is shown first; you choose to execute (`e`), copy to the clipboard (`c`), or cancel (`q` / Enter).
 - **Shows which LLM answered** — every response prints the model that generated it, so you always know which one produced a given command.
 - **Cross-platform installer** — one script sets up Ollama, the systemd service (or LaunchAgent on macOS), the models, and the `ai` shell function.
+- **Hardware-aware** — with an AMD or NVIDIA GPU with 8 GB+ of VRAM, the default model is upgraded to Qwen3.5-4B with a 128k context. Re-run the installer at any time to re-detect the hardware and update the model.
 
 ## Models
 
@@ -37,13 +38,30 @@ The installer downloads and registers four small GGUF models in Ollama. Each one
 
 All models are small enough to run comfortably on CPU-only machines, laptops, and low-resource environments (the generalist model is the largest, at ~800 MB).
 
+### GPU profile (default model)
+
+On every run, the installer detects the hardware (`nvidia-smi` for NVIDIA, including WSL; the `amdgpu` sysfs entries for AMD on Linux). If it finds an AMD or NVIDIA GPU with **8 GB of VRAM or more**, the default model (`terminal`) is built from the Ollama library model **`qwen3.5:4b-q4_K_M`** (~3.3 GB) with a **128k context** (`num_ctx 131072`) instead of the 0.5B El-Terminalo GGUF:
+
+| Hardware                              | Default model (`terminal`)                       | Context |
+|---------------------------------------|--------------------------------------------------|---------|
+| AMD/NVIDIA GPU with ≥ 8 GB VRAM       | Qwen3.5-4B (`qwen3.5:4b-q4_K_M`)                  | 128k    |
+| Anything else (CPU, iGPU, < 8 GB)     | Qwen-0.5B-Coder-El-Terminalo (Q8)                | model default |
+
+With the GPU profile the installer also:
+
+- installs Ollama's GPU backend on Arch/Omarchy, where it is packaged separately (`ollama-cuda` for NVIDIA, `ollama-vulkan` for AMD). The official installer used on other distros already bundles it;
+- adds a systemd drop-in (`/etc/systemd/system/ollama.service.d/terminal-ai.conf`) with flash attention and an 8-bit KV cache, so the 128k context fits in 8 GB of VRAM (plus `OLLAMA_VULKAN=1` on AMD);
+- runs the model with thinking disabled, so only the command is printed.
+
+The installer is safe to run repeatedly: every run re-detects the hardware and switches the default model, the drop-in, and the label shown by `ai` to match (e.g. after adding or removing a GPU). If `qwen3.5:4b-q4_K_M` was pulled by the installer and is no longer needed, it is removed. If the model can't be pulled (for example, Ollama is too old), the installer falls back to the CPU model. The detected profile is recorded in `~/.local/share/terminal-ai/profile`.
+
 ## Requirements
 
 - Linux (Ubuntu, Debian, Fedora, CentOS/RHEL/Rocky/AlmaLinux, Arch/Omarchy/Manjaro/EndeavourOS), WSL, or macOS.
 - `curl`.
 - `bash` or `zsh`.
 - `sudo` (used automatically when not running as root; installs system dependencies and configures the systemd service).
-- Internet access to download the models from Hugging Face (roughly 2–2.5 GB in total, across the four models).
+- Internet access to download the models from Hugging Face (roughly 2–2.5 GB in total, across the four models), plus ~3.3 GB from the Ollama library with the GPU profile.
 
 ## Installation
 
@@ -70,11 +88,12 @@ The installer will:
 2. Install Ollama if it isn't already present.
 3. Configure the Ollama service (systemd on Linux, a WSL boot command, or a LaunchAgent on macOS).
 4. Wait for the Ollama server to come up.
-5. Download all four GGUF models to `~/.local/share/terminal-ai` and register them in Ollama (`ollama create`).
-6. Create the per-model harness files under `~/.local/share/terminal-ai/harness` (skipped if they already exist).
-7. Install the `ai` executable to `~/.local/bin/ai`.
-8. Add a `PATH` entry, environment variables, and an `ai()` shell function to `~/.bashrc` or `~/.zshrc`.
-9. Run a smoke test against each registered model.
+5. Detect the GPU and pick the hardware profile (see [GPU profile](#gpu-profile-default-model)); with the GPU profile, install the GPU backend if needed and pull `qwen3.5:4b-q4_K_M`.
+6. Download the GGUF models to `~/.local/share/terminal-ai` and register them in Ollama (`ollama create`).
+7. Create the per-model harness files under `~/.local/share/terminal-ai/harness` (skipped if they already exist).
+8. Install the `ai` executable to `~/.local/bin/ai`.
+9. Add a `PATH` entry, environment variables, and an `ai()` shell function to `~/.bashrc` or `~/.zshrc`.
+10. Run a smoke test against each registered model.
 
 After installation, open a new terminal or reload your shell configuration:
 
@@ -90,10 +109,11 @@ source ~/.bashrc   # or source ~/.zshrc
 
 This removes everything the installer created:
 
-1. The four registered models (`ollama rm`).
+1. The four registered models (`ollama rm`), plus `qwen3.5:4b-q4_K_M` if the installer pulled it.
 2. The `~/.local/share/terminal-ai` directory (GGUF files, Modelfiles, and harness files).
 3. The `~/.local/bin/ai` executable.
 4. The managed block in `~/.bashrc` and `~/.zshrc`.
+5. The GPU tuning drop-in for the Ollama service, if present.
 
 Ollama itself is left installed, since it may be used by other applications — the command prints the steps to remove it too, if you want to.
 
@@ -105,9 +125,14 @@ Set these before running the installer to customize install locations or the bas
 |----------------|-----------------------------------|------------------------------------------------|
 | `MODEL_NAME`   | `terminal`                        | Base name used for all four registered models (`terminal`, `terminal-dev`, `terminal-gen`, `terminal-fn`). |
 | `INSTALL_DIR`  | `$HOME/.local/share/terminal-ai`  | Where GGUF files and Modelfiles are stored.    |
+| `HW_PROFILE`   | `auto`                            | `auto` detects the hardware; `gpu` or `cpu` forces a profile. |
+| `GPU_MODEL`    | `qwen3.5:4b-q4_K_M`               | Ollama library model used as the default model with the GPU profile. |
+| `GPU_NUM_CTX`  | `131072`                          | Context window (tokens) of the GPU default model. |
+| `GPU_MIN_VRAM_MB` | `7680`                         | Minimum VRAM for the GPU profile. 8 GB cards report slightly less than 8192 MiB, hence the slack. |
 
 ```bash
 MODEL_NAME=myai INSTALL_DIR="$HOME/.local/share/myai" ./install-terminal-ai.sh
+HW_PROFILE=cpu ./install-terminal-ai.sh   # keep the small CPU model even with a GPU
 ```
 
 ## Usage
