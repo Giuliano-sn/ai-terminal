@@ -23,11 +23,12 @@ ps aux --sort=-%mem | head -n 11
 - **Review before you run** — every generated command is shown first; you choose to execute (`e`), copy to the clipboard (`c`), or cancel (`q` / Enter).
 - **Shows which LLM answered** — every response prints the model that generated it, so you always know which one produced a given command.
 - **Cross-platform installer** — one script sets up Ollama, the systemd service (or LaunchAgent on macOS), the models, and the `ai` shell function.
-- **Hardware-aware** — with an AMD or NVIDIA GPU with 8 GB+ of VRAM, the default model is upgraded to Qwen3.5-4B with a 128k context. Re-run the installer at any time to re-detect the hardware and update the model.
+- **Hardware-aware** — with an AMD or NVIDIA GPU with 8 GB+ of VRAM, terminal commands use Qwen2.5-Coder-7B-Instruct and `-g` uses Qwen3.5-4B. Re-run the installer at any time to re-detect the hardware and update the models.
+- **Automatic model swapping** — when the requested model doesn't fit in memory next to the ones already loaded, `ai` unloads the others first.
 
 ## Models
 
-The installer downloads and registers four small GGUF models in Ollama. Each one is exposed through a flag on the `ai` command:
+The installer registers four models in Ollama (the CPU profile below; see [GPU profile](#gpu-profile) for what changes with a GPU). Each one is exposed through a flag on the `ai` command:
 
 | Flag | Purpose            | Model                                          | Ollama name (default)   |
 |------|--------------------|-------------------------------------------------|--------------------------|
@@ -36,24 +37,37 @@ The installer downloads and registers four small GGUF models in Ollama. Each one
 | `-g` | Generalist         | meta-llama/Llama-3.2-1B-Instruct (Q4_K_M)      | `terminal-gen`           |
 | `-f` | Function-calling   | FunctionGemma 270M (Q4_K_M)                    | `terminal-fn`            |
 
+Every model runs with a **32k context window** (`num_ctx 32768`), on both profiles; change it with the `NUM_CTX` installer variable.
+
 All models are small enough to run comfortably on CPU-only machines, laptops, and low-resource environments (the generalist model is the largest, at ~800 MB).
 
-### GPU profile (default model)
+### GPU profile
 
-On every run, the installer detects the hardware (`nvidia-smi` for NVIDIA, including WSL; the `amdgpu` sysfs entries for AMD on Linux). If it finds an AMD or NVIDIA GPU with **8 GB of VRAM or more**, the default model (`terminal`) is built from the Ollama library model **`qwen3.5:4b-q4_K_M`** (~3.3 GB) with a **128k context** (`num_ctx 131072`) instead of the 0.5B El-Terminalo GGUF:
+On every run, the installer detects the hardware (`nvidia-smi` for NVIDIA, including WSL; the `amdgpu` sysfs entries for AMD on Linux). If it finds an AMD or NVIDIA GPU with **8 GB of VRAM or more**, two models are upgraded to larger models from the Ollama library:
 
-| Hardware                              | Default model (`terminal`)                       | Context |
-|---------------------------------------|--------------------------------------------------|---------|
-| AMD/NVIDIA GPU with ≥ 8 GB VRAM       | Qwen3.5-4B (`qwen3.5:4b-q4_K_M`)                  | 128k    |
-| Anything else (CPU, iGPU, < 8 GB)     | Qwen-0.5B-Coder-El-Terminalo (Q8)                | model default |
+| Flag     | Purpose              | CPU profile (default)              | GPU profile (≥ 8 GB VRAM)                                    |
+|----------|----------------------|------------------------------------|--------------------------------------------------------------|
+| _(none)_ | Terminal commands    | Qwen-0.5B-Coder-El-Terminalo (Q8)  | Qwen2.5-Coder-7B-Instruct (`qwen2.5-coder:7b-instruct`, ~4.7 GB) |
+| `-g`     | Generalist           | Llama-3.2-1B-Instruct (Q4_K_M)     | Qwen3.5-4B (`qwen3.5:4b-q4_K_M`, ~3.3 GB, thinking disabled) |
+| `-d`     | Developer            | Qwen2.5-Coder-0.5B-Instruct        | _(same)_                                                     |
+| `-f`     | Function-calling     | FunctionGemma 270M                 | _(same)_                                                     |
 
 With the GPU profile the installer also:
 
 - installs Ollama's GPU backend on Arch/Omarchy, where it is packaged separately (`ollama-cuda` for NVIDIA, `ollama-vulkan` for AMD). The official installer used on other distros already bundles it;
-- adds a systemd drop-in (`/etc/systemd/system/ollama.service.d/terminal-ai.conf`) with flash attention and an 8-bit KV cache, so the 128k context fits in 8 GB of VRAM (plus `OLLAMA_VULKAN=1` on AMD);
-- runs the model with thinking disabled, so only the command is printed.
+- adds a systemd drop-in (`/etc/systemd/system/ollama.service.d/terminal-ai.conf`) with flash attention and an 8-bit KV cache, so the 32k contexts take less VRAM (plus `OLLAMA_VULKAN=1` on AMD).
 
-The installer is safe to run repeatedly: every run re-detects the hardware and switches the default model, the drop-in, and the label shown by `ai` to match (e.g. after adding or removing a GPU). If `qwen3.5:4b-q4_K_M` was pulled by the installer and is no longer needed, it is removed. If the model can't be pulled (for example, Ollama is too old), the installer falls back to the CPU model. The detected profile is recorded in `~/.local/share/terminal-ai/profile`.
+The installer is safe to run repeatedly: every run re-detects the hardware and switches the models, the drop-in, and the labels shown by `ai` to match (e.g. after adding or removing a GPU). Library models the installer pulled and no longer needs are removed. If a model can't be pulled (for example, Ollama is too old), that model falls back to its CPU version. The detected profile is recorded in `~/.local/share/terminal-ai/profile`.
+
+### Model swapping
+
+On an 8 GB card the 7B coder (~6 GB) and Qwen3.5-4B (~4.3 GB), both with 32k context, don't fit in VRAM together. Before each request, `ai` checks whether the requested model fits next to the models already loaded (VRAM minus a reserve of `GPU_VRAM_RESERVE_MB` on the GPU profile, free RAM on the CPU profile). If it doesn't, `ai` unloads its other models (`ollama stop`), largest first, until it fits, and prints which one it unloaded:
+
+```
+[Not enough memory for terminal-gen: unloading terminal:latest (5.6 GB)]
+```
+
+The first decisions use the installer's estimates. After each run, `ai` records how much memory the model really used (from `ollama ps`) in `~/.local/share/terminal-ai/memory` and uses that from then on. Models that don't belong to terminal-ai are never unloaded, but their memory is counted.
 
 ## Requirements
 
@@ -61,7 +75,7 @@ The installer is safe to run repeatedly: every run re-detects the hardware and s
 - `curl`.
 - `bash` or `zsh`.
 - `sudo` (used automatically when not running as root; installs system dependencies and configures the systemd service).
-- Internet access to download the models from Hugging Face (roughly 2–2.5 GB in total, across the four models), plus ~3.3 GB from the Ollama library with the GPU profile.
+- Internet access to download the models from Hugging Face (roughly 2–2.5 GB in total, across the four models), plus ~8 GB from the Ollama library with the GPU profile.
 
 ## Installation
 
@@ -88,7 +102,7 @@ The installer will:
 2. Install Ollama if it isn't already present.
 3. Configure the Ollama service (systemd on Linux, a WSL boot command, or a LaunchAgent on macOS).
 4. Wait for the Ollama server to come up.
-5. Detect the GPU and pick the hardware profile (see [GPU profile](#gpu-profile-default-model)); with the GPU profile, install the GPU backend if needed and pull `qwen3.5:4b-q4_K_M`.
+5. Detect the GPU and pick the hardware profile (see [GPU profile](#gpu-profile)); with the GPU profile, install the GPU backend if needed and pull `qwen2.5-coder:7b-instruct` and `qwen3.5:4b-q4_K_M`.
 6. Download the GGUF models to `~/.local/share/terminal-ai` and register them in Ollama (`ollama create`).
 7. Create the per-model harness files under `~/.local/share/terminal-ai/harness` (skipped if they already exist).
 8. Install the `ai` executable to `~/.local/bin/ai`.
@@ -109,7 +123,7 @@ source ~/.bashrc   # or source ~/.zshrc
 
 This removes everything the installer created:
 
-1. The four registered models (`ollama rm`), plus `qwen3.5:4b-q4_K_M` if the installer pulled it.
+1. The four registered models (`ollama rm`), plus the GPU profile's library models if the installer pulled them.
 2. The `~/.local/share/terminal-ai` directory (GGUF files, Modelfiles, and harness files).
 3. The `~/.local/bin/ai` executable.
 4. The managed block in `~/.bashrc` and `~/.zshrc`.
@@ -125,9 +139,11 @@ Set these before running the installer to customize install locations or the bas
 |----------------|-----------------------------------|------------------------------------------------|
 | `MODEL_NAME`   | `terminal`                        | Base name used for all four registered models (`terminal`, `terminal-dev`, `terminal-gen`, `terminal-fn`). |
 | `INSTALL_DIR`  | `$HOME/.local/share/terminal-ai`  | Where GGUF files and Modelfiles are stored.    |
+| `NUM_CTX`      | `32768`                           | Context window (tokens) of every model, on both profiles. |
 | `HW_PROFILE`   | `auto`                            | `auto` detects the hardware; `gpu` or `cpu` forces a profile. |
-| `GPU_MODEL`    | `qwen3.5:4b-q4_K_M`               | Ollama library model used as the default model with the GPU profile. |
-| `GPU_NUM_CTX`  | `131072`                          | Context window (tokens) of the GPU default model. |
+| `GPU_CODER_MODEL` | `qwen2.5-coder:7b-instruct`    | Library model for terminal commands (default model) with the GPU profile. |
+| `GPU_GEN_MODEL` | `qwen3.5:4b-q4_K_M`              | Library model for `-g` with the GPU profile. |
+| `GPU_VRAM_RESERVE_MB` | `768`                      | VRAM left for the desktop when deciding whether models fit together. |
 | `GPU_MIN_VRAM_MB` | `7680`                         | Minimum VRAM for the GPU profile. 8 GB cards report slightly less than 8192 MiB, hence the slack. |
 
 ```bash
@@ -138,9 +154,9 @@ HW_PROFILE=cpu ./install-terminal-ai.sh   # keep the small CPU model even with a
 ## Usage
 
 ```bash
-ai "<description of what you want to do>"
+ai "<description of what you want to do>"   # default model (El-Terminalo, or Qwen2.5-Coder-7B with a GPU)
 ai -d "<description>"   # use the developer model (Qwen2.5-Coder-0.5B-Instruct)
-ai -g "<description>"   # use the generalist model (Llama-3.2-1B-Instruct)
+ai -g "<description>"   # use the generalist model (Llama-3.2-1B, or Qwen3.5-4B with a GPU)
 ai -f "<description>"   # use the function-calling model (FunctionGemma 270M)
 ai -H [-d|-g|-f]         # edit that model's harness file in $EDITOR/$VISUAL
 ```
